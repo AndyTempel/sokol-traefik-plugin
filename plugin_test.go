@@ -159,8 +159,20 @@ func TestBlockRendersCustomHTMLWithEscapedPlaceholdersAndSecurityHeaders(t *test
 			t.Fatalf("%s = %q", name, got)
 		}
 	}
-	if response.Header().Get("Content-Security-Policy") == "" {
+	csp := response.Header().Get("Content-Security-Policy")
+	if csp == "" {
 		t.Fatal("missing CSP")
+	}
+	for _, expected := range []string{
+		"style-src 'unsafe-inline' https://fonts.bunny.net",
+		"font-src https://fonts.bunny.net",
+	} {
+		if !strings.Contains(csp, expected) {
+			t.Fatalf("CSP does not permit the pinned Bunny Fonts origin: %q", csp)
+		}
+	}
+	if strings.Contains(csp, "*") {
+		t.Fatalf("CSP contains a wildcard source: %q", csp)
 	}
 }
 

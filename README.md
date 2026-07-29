@@ -36,7 +36,12 @@ to the configured `responses.root`, which defaults to `/etc/traefik/sokol`.
 Operators can replace any page with bounded custom HTML.
 
 These files are compiled from the `sokol-plugin` section of the KSoft error
-pages project. They contain no external assets or runtime scripts.
+pages project. They contain no runtime scripts and load only Rubik and Rubik
+Dirt from the privacy-focused Bunny Fonts service. The plugin CSP permits only
+that exact font origin in addition to inline page styles.
+
+The falcon silhouette is adapted from the public-domain Openclipart
+`GDI-CnC3-logo.svg` artwork.
 
 ## Verification
 

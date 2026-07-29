@@ -144,7 +144,8 @@ func TestConfigurationCollectionsAndBodyAreBounded(t *testing.T) {
 	}
 }
 
-func TestShippedSokolPagesAreBoundedAndSelfContained(t *testing.T) {
+func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
+	const bunnyStylesheet = "https://fonts.bunny.net/css?family=rubik:400,700|rubik-dirt:400&display=swap"
 	for _, name := range []string{
 		"block.html",
 		"challenge.html",
@@ -164,15 +165,20 @@ func TestShippedSokolPagesAreBoundedAndSelfContained(t *testing.T) {
 			[]byte("{{SOKOL_HOST}}"),
 			[]byte("{{SOKOL_PATH}}"),
 			[]byte("{{SOKOL_TIMESTAMP}}"),
+			[]byte(bunnyStylesheet),
+			[]byte("font-family:Rubik Dirt"),
 		} {
 			if !bytes.Contains(content, expected) {
 				t.Fatalf("shipped page %s is missing %q", name, expected)
 			}
 		}
 		if bytes.Contains(content, []byte("http://")) ||
-			bytes.Contains(content, []byte("https://")) ||
 			bytes.Contains(content, []byte("<script")) {
-			t.Fatalf("shipped page %s contains an external dependency or script", name)
+			t.Fatalf("shipped page %s contains an insecure dependency or script", name)
+		}
+		withoutBunny := bytes.ReplaceAll(content, []byte(bunnyStylesheet), nil)
+		if bytes.Contains(withoutBunny, []byte("https://")) {
+			t.Fatalf("shipped page %s contains a non-Bunny remote dependency", name)
 		}
 	}
 	challenge, err := os.ReadFile(filepath.Join("pages", "challenge.html"))

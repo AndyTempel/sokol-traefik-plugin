@@ -60,7 +60,8 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Content-Security-Policy",
 		"default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; "+
-			"img-src 'self' data:; style-src 'unsafe-inline'; script-src 'nonce-"+nonce+"'")
+			"img-src 'self' data:; style-src 'unsafe-inline' https://fonts.bunny.net; "+
+			"font-src https://fonts.bunny.net; script-src 'nonce-"+nonce+"'")
 	template := string(p.page(response.Decision, time.Now()))
 	replacements := map[string]string{
 		"{{SOKOL_REQUEST_ID}}":      html.EscapeString(response.RequestID),

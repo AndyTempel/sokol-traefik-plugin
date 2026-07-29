@@ -1,0 +1,47 @@
+http:
+  routers:
+    compatibility:
+      entryPoints:
+        - web
+      rule: PathPrefix(`/`)
+      middlewares:
+        - sokol
+      service: upstream
+
+  middlewares:
+    sokol:
+      plugin:
+        sokol:
+          agent:
+            endpoint: http://agent:8082
+            tokenFile: /run/secrets/sokol-plugin-token
+            connectTimeout: 50ms
+            requestTimeout: 150ms
+          trustedProxies:
+            - 172.16.0.0/12
+          requestBody:
+            enabled: true
+            maximumBytes: 1048576
+            oversizeAction: headers_only
+            contentTypes:
+              - application/json
+              - application/x-www-form-urlencoded
+              - multipart/form-data
+            bypassPathPrefixes:
+              - /uploads
+          responses:
+            root: /pages
+            blockFile: block.html
+            challengeFile: challenge.html
+            rateLimitFile: rate-limit.html
+            unavailableFile: unavailable.html
+            maximumFileBytes: 524288
+            reloadInterval: 1s
+            defaultFormat: html
+            allowSymlinks: false
+
+  services:
+    upstream:
+      loadBalancer:
+        servers:
+          - url: http://upstream:8081

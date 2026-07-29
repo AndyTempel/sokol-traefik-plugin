@@ -1,0 +1,28 @@
+services:
+  traefik:
+    build:
+      context: ../..
+      dockerfile: tests/traefik/Traefik.Dockerfile
+    depends_on:
+      - agent
+      - upstream
+
+  agent:
+    build:
+      context: ../..
+      dockerfile: tests/traefik/Dockerfile
+    command: ["agent"]
+
+  upstream:
+    build:
+      context: ../..
+      dockerfile: tests/traefik/Dockerfile
+    command: ["upstream"]
+
+  check:
+    build:
+      context: ../..
+      dockerfile: tests/traefik/Dockerfile
+    command: ["check"]
+    depends_on:
+      - traefik

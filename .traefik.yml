@@ -1,0 +1,12 @@
+displayName: Sokol Edge
+type: middleware
+runtime: yaegi
+import: git.ksoft.tech/ksoft/sokol-traefik-plugin
+summary: Bounded local integration with the native Sokol Edge Agent
+compatibility: "= 3.7.9"
+testData:
+  agent:
+    endpoint: http://sokol-edge-agent:8080
+    tokenFile: /run/secrets/sokol-plugin-token
+    connectTimeout: 100ms
+    requestTimeout: 500ms

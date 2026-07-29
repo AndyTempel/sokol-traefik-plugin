@@ -1,0 +1,16 @@
+log:
+  level: INFO
+
+entryPoints:
+  web:
+    address: ":8080"
+
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+
+experimental:
+  abortOnPluginFailure: true
+  localPlugins:
+    sokol:
+      moduleName: git.ksoft.tech/ksoft/sokol-traefik-plugin

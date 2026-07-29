@@ -1,0 +1,240 @@
+package sokol_traefik_plugin
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+const maximumAgentResponseBytes = 32 << 10
+
+type evaluationRequest struct {
+	RequestID    string            `json:"request_id"`
+	ClientIP     string            `json:"client_ip"`
+	Method       string            `json:"method"`
+	Scheme       string            `json:"scheme"`
+	Host         string            `json:"host"`
+	Path         string            `json:"path"`
+	Query        string            `json:"query"`
+	Headers      map[string]string `json:"headers"`
+	Cookies      map[string]string `json:"cookies"`
+	ProtocolType string            `json:"protocol_type"`
+	Body         []byte            `json:"body,omitempty"`
+	ResourceHint string            `json:"resource_hint,omitempty"`
+}
+
+type evaluationResponse struct {
+	Decision       string `json:"decision"`
+	Status         int    `json:"status"`
+	RequestID      string `json:"request_id"`
+	PublicReason   string `json:"public_reason"`
+	CacheTTLMS     int    `json:"cache_ttl_ms"`
+	ResourceID     string `json:"resource_id,omitempty"`
+	ChallengeURL   string `json:"challenge_url,omitempty"`
+	ChallengeToken string `json:"challenge_token,omitempty"`
+}
+
+type agentErrorKind int
+
+const (
+	agentUnavailable agentErrorKind = iota
+	agentMalformed
+)
+
+type agentError struct {
+	kind agentErrorKind
+	err  error
+}
+
+func (e *agentError) Error() string {
+	return e.err.Error()
+}
+
+type agentClient struct {
+	client      *http.Client
+	evaluateURL string
+	token       string
+	timeout     time.Duration
+}
+
+func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.Duration) (*agentClient, error) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return dialLocalAgent(ctx, dialer, network, address)
+		},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   connectTimeout,
+		ResponseHeaderTimeout: requestTimeout,
+		ExpectContinueTimeout: 100 * time.Millisecond,
+	}
+	evaluateURL := strings.TrimSuffix(endpoint, "/") + "/v1/evaluate"
+	if parsed.Scheme == "unix" {
+		socketPath := filepath.Clean(parsed.Path)
+		transport.ForceAttemptHTTP2 = false
+		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "unix", socketPath)
+		}
+		evaluateURL = "http://sokol-edge-agent/v1/evaluate"
+	}
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("agent redirects are forbidden")
+		},
+	}
+	return &agentClient{client: client, evaluateURL: evaluateURL, token: token, timeout: requestTimeout}, nil
+}
+
+func dialLocalAgent(ctx context.Context, dialer *net.Dialer, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, errors.New("local agent dial address is invalid")
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		if !localAgentIP(ip) {
+			return nil, errors.New("local agent resolved to a public address")
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve local agent: %w", err)
+	}
+	if len(addresses) > 16 {
+		addresses = addresses[:16]
+	}
+	var lastError error
+	for _, candidate := range addresses {
+		if !localAgentIP(candidate.IP) {
+			continue
+		}
+		connection, err := dialer.DialContext(
+			ctx, network, net.JoinHostPort(candidate.IP.String(), port),
+		)
+		if err == nil {
+			return connection, nil
+		}
+		lastError = err
+	}
+	if lastError != nil {
+		return nil, fmt.Errorf("connect to local agent: %w", lastError)
+	}
+	return nil, errors.New("local agent DNS name did not resolve to a local address")
+}
+
+func (c *agentClient) evaluate(parent context.Context, input evaluationRequest) (evaluationResponse, error) {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: errors.New("encode local evaluation")}
+	}
+	ctx, cancel := context.WithTimeout(parent, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.evaluateURL, bytes.NewReader(encoded))
+	if err != nil {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: errors.New("construct local evaluation")}
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+
+	response, err := c.client.Do(request)
+	if err != nil {
+		return evaluationResponse{}, &agentError{kind: agentUnavailable, err: fmt.Errorf("local agent request: %w", err)}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return evaluationResponse{}, &agentError{kind: agentUnavailable, err: fmt.Errorf("local agent status %d", response.StatusCode)}
+	}
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "application/json") {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: errors.New("local agent returned a non-JSON response")}
+	}
+	limited := &io.LimitedReader{R: response.Body, N: maximumAgentResponseBytes + 1}
+	decoder := json.NewDecoder(limited)
+	decoder.DisallowUnknownFields()
+	var output evaluationResponse
+	if err := decoder.Decode(&output); err != nil {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: errors.New("decode local agent response")}
+	}
+	if limited.N <= 0 {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: errors.New("local agent response exceeds limit")}
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: errors.New("local agent response has trailing data")}
+	}
+	if err := validateEvaluationResponse(input.RequestID, output); err != nil {
+		return evaluationResponse{}, &agentError{kind: agentMalformed, err: err}
+	}
+	return output, nil
+}
+
+func validateEvaluationResponse(requestID string, response evaluationResponse) error {
+	if response.RequestID != requestID {
+		return errors.New("local agent response request ID mismatch")
+	}
+	expectedStatus := 0
+	switch response.Decision {
+	case "allow", "observe":
+		expectedStatus = http.StatusOK
+	case "block", "challenge":
+		expectedStatus = http.StatusForbidden
+	case "rate_limit":
+		expectedStatus = http.StatusTooManyRequests
+	case "error":
+		if response.Status < 400 || response.Status > 599 {
+			return errors.New("local agent error status is invalid")
+		}
+	default:
+		return errors.New("local agent decision is invalid")
+	}
+	if expectedStatus != 0 && response.Status != expectedStatus {
+		return errors.New("local agent status does not match decision")
+	}
+	if !validPublicReason(response.PublicReason) || len(response.ResourceID) > 128 {
+		return errors.New("local agent public fields are invalid")
+	}
+	if response.CacheTTLMS < 0 || response.CacheTTLMS > int(maximumCacheTTL/time.Millisecond) {
+		return errors.New("local agent cache TTL is invalid")
+	}
+	if response.ChallengeURL != "" &&
+		(!strings.HasPrefix(response.ChallengeURL, "/") || strings.HasPrefix(response.ChallengeURL, "//") ||
+			len(response.ChallengeURL) > 2048 || strings.ContainsAny(response.ChallengeURL, "\r\n")) {
+		return errors.New("local agent challenge URL is invalid")
+	}
+	if len(response.ChallengeToken) > 4096 || strings.ContainsAny(response.ChallengeToken, "\r\n") {
+		return errors.New("local agent challenge token is invalid")
+	}
+	return nil
+}
+
+func validPublicReason(value string) bool {
+	if len(value) < 1 || len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '_' {
+			return false
+		}
+	}
+	return true
+}

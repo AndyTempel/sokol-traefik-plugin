@@ -92,7 +92,11 @@ func evaluationCacheKey(request evaluationRequest) string {
 	writeHashPart(hash, request.Path)
 	writeHashPart(hash, request.Query)
 	writeHashPart(hash, request.ProtocolType)
+	writeHashPart(hash, request.HTTPVersion)
 	writeHashPart(hash, request.ResourceHint)
+	if request.BodyTruncated {
+		writeHashPart(hash, "body-truncated")
+	}
 	writeStringMap(hash, request.Headers)
 	writeStringMap(hash, request.Cookies)
 	if len(request.Body) != 0 {

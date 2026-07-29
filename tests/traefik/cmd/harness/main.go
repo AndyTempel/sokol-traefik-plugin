@@ -20,10 +20,12 @@ import (
 const testTokenPath = "/run/secrets/sokol-plugin-token"
 
 type evaluationRequest struct {
-	RequestID    string `json:"request_id"`
-	Path         string `json:"path"`
-	ProtocolType string `json:"protocol_type"`
-	Body         []byte `json:"body"`
+	RequestID     string `json:"request_id"`
+	Path          string `json:"path"`
+	ProtocolType  string `json:"protocol_type"`
+	HTTPVersion   string `json:"http_version"`
+	Body          []byte `json:"body"`
+	BodyTruncated bool   `json:"body_truncated"`
 }
 
 func main() {

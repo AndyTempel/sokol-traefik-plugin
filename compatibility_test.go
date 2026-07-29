@@ -110,6 +110,12 @@ func TestTransportAndStreamingCompatibilityUsesOriginalWriter(t *testing.T) {
 			if input.ProtocolType != test.expected {
 				t.Fatalf("protocol type = %q", input.ProtocolType)
 			}
+			if input.HTTPVersion != test.proto {
+				t.Fatalf("HTTP version = %q", input.HTTPVersion)
+			}
+			if len(test.transfer) > 0 && input.Headers["transfer-encoding"] != "chunked" {
+				t.Fatalf("transfer encoding = %q", input.Headers["transfer-encoding"])
+			}
 			if downstream.Load() != 1 || originalWriter.body.String() != "firstsecond" || originalWriter.flushes != 1 {
 				t.Fatalf("downstream=%d body=%q flushes=%d", downstream.Load(), originalWriter.body.String(), originalWriter.flushes)
 			}
@@ -167,8 +173,8 @@ func TestLargeUploadAndDownloadAreNotBufferedByMiddleware(t *testing.T) {
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	input := <-fixture.inputs
-	if received != len(upload) || len(input.Body) != 0 || response.Body.Len() != 2<<20 {
-		t.Fatalf("upload=%d agent body=%d download=%d", received, len(input.Body), response.Body.Len())
+	if received != len(upload) || len(input.Body) != 0 || input.BodyTruncated || response.Body.Len() != 2<<20 {
+		t.Fatalf("upload=%d agent body=%d truncated=%t download=%d", received, len(input.Body), input.BodyTruncated, response.Body.Len())
 	}
 }
 

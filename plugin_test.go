@@ -107,7 +107,8 @@ func TestAllowCallsNextAndSendsBoundedNormalizedMetadata(t *testing.T) {
 	}
 	input := <-fixture.inputs
 	if input.ClientIP != "203.0.113.8" || input.Host != "example.test" ||
-		input.Path != "/api/items" || input.Query != "page=1" || input.ProtocolType != "http" {
+		input.Path != "/api/items" || input.Query != "page=1" ||
+		input.ProtocolType != "http" || input.HTTPVersion != "HTTP/1.1" {
 		t.Fatalf("unexpected input: %#v", input)
 	}
 	if input.Headers["user-agent"] != "compat-test" {
@@ -115,6 +116,9 @@ func TestAllowCallsNextAndSendsBoundedNormalizedMetadata(t *testing.T) {
 	}
 	if _, present := input.Headers["authorization"]; present {
 		t.Fatal("authorization header was forwarded")
+	}
+	if _, present := input.Headers["content-length"]; present {
+		t.Fatal("content length was invented for GET")
 	}
 	if input.Cookies["__Host-sokol_trust"] != "trust" || input.Cookies["session"] != "" {
 		t.Fatalf("selected cookies = %#v", input.Cookies)
@@ -349,5 +353,26 @@ func TestEnabledBodyCaptureRestoresBodyForDownstream(t *testing.T) {
 	input := <-fixture.inputs
 	if !bytes.Equal(input.Body, original) || !bytes.Equal(downstreamBody, original) {
 		t.Fatalf("agent body=%q downstream body=%q", input.Body, downstreamBody)
+	}
+}
+
+func TestOversizedCapturedBodySignalsTruncationAndRestoresDownstream(t *testing.T) {
+	fixture := newAgentFixture(t)
+	config := testConfig(t, fixture)
+	config.RequestBody.Enabled = true
+	config.RequestBody.MaximumBytes = 32
+	config.RequestBody.OversizeAction = "headers_only"
+	original := bytes.Repeat([]byte("x"), 128)
+	var downstreamBody []byte
+	handler := newMiddleware(t, config, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		downstreamBody, _ = io.ReadAll(request.Body)
+	}))
+	request := httptest.NewRequest("POST", "http://example.test/api", bytes.NewReader(original))
+	request.RemoteAddr = "198.51.100.2:1234"
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+	input := <-fixture.inputs
+	if len(input.Body) != 0 || !input.BodyTruncated || !bytes.Equal(downstreamBody, original) {
+		t.Fatalf("agent body=%d truncated=%t downstream body=%d", len(input.Body), input.BodyTruncated, len(downstreamBody))
 	}
 }

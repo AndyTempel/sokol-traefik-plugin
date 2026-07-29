@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,18 +45,20 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		body = nil
 	}
 	input := evaluationRequest{
-		RequestID:    requestID,
-		ClientIP:     clientIP.String(),
-		Method:       strings.ToUpper(request.Method),
-		Scheme:       requestScheme(request, m.runtime.trusted),
-		Host:         request.Host,
-		Path:         request.URL.Path,
-		Query:        request.URL.RawQuery,
-		Headers:      m.selectedHeaders(request),
-		Cookies:      m.selectedRequestCookies(request),
-		ProtocolType: protocol,
-		Body:         body,
-		ResourceHint: m.config.ResourceHint,
+		RequestID:     requestID,
+		ClientIP:      clientIP.String(),
+		Method:        strings.ToUpper(request.Method),
+		Scheme:        requestScheme(request, m.runtime.trusted),
+		Host:          request.Host,
+		Path:          request.URL.Path,
+		Query:         request.URL.RawQuery,
+		Headers:       m.selectedHeaders(request),
+		Cookies:       m.selectedRequestCookies(request),
+		ProtocolType:  protocol,
+		HTTPVersion:   request.Proto,
+		Body:          body,
+		BodyTruncated: oversized,
+		ResourceHint:  m.config.ResourceHint,
 	}
 	if input.Path == "" {
 		input.Path = "/"
@@ -123,7 +126,7 @@ func (m *Middleware) handleFailure(writer http.ResponseWriter, request *http.Req
 }
 
 func (m *Middleware) selectedHeaders(request *http.Request) map[string]string {
-	result := make(map[string]string, len(m.selectedHeads))
+	result := make(map[string]string, len(m.selectedHeads)+2)
 	for _, name := range m.selectedHeads {
 		values := request.Header.Values(name)
 		if len(values) == 0 {
@@ -134,6 +137,13 @@ func (m *Middleware) selectedHeaders(request *http.Request) map[string]string {
 			value = value[:4096]
 		}
 		result[strings.ToLower(name)] = value
+	}
+	if request.ContentLength >= 0 &&
+		request.Method != http.MethodGet && request.Method != http.MethodHead {
+		result["content-length"] = strconv.FormatInt(request.ContentLength, 10)
+	}
+	if len(request.TransferEncoding) > 0 {
+		result["transfer-encoding"] = strings.Join(request.TransferEncoding, ", ")
 	}
 	return result
 }

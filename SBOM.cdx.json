@@ -1,0 +1,19 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [],
+  "metadata": {
+    "component": {
+      "name": "git.ksoft.tech/ksoft/sokol-traefik-plugin",
+      "type": "application",
+      "version": "development"
+    },
+    "properties": [
+      {
+        "name": "sokol:runtime-dependencies",
+        "value": "Go standard library only"
+      }
+    ]
+  },
+  "specVersion": "1.6",
+  "version": 1
+}

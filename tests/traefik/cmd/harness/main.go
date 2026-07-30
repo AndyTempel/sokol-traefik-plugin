@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+const (
+	webSocketSoakFrames = 50
+	webSocketSoakDelay  = 20 * time.Millisecond
+)
+
 const testTokenPath = "/run/secrets/sokol-plugin-token"
 
 type evaluationRequest struct {
@@ -258,12 +263,18 @@ func websocketEcho(writer http.ResponseWriter, request *http.Request) {
 	accept := websocketAccept(request.Header.Get("Sec-WebSocket-Key"))
 	_, _ = fmt.Fprintf(buffer, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
 	_ = buffer.Flush()
-	opcode, payload, err := readWebSocketFrame(buffer.Reader)
-	if err != nil || opcode != 1 {
-		return
+	for range webSocketSoakFrames {
+		opcode, payload, err := readWebSocketFrame(buffer.Reader)
+		if err != nil || opcode != 1 {
+			return
+		}
+		if err := writeWebSocketFrame(buffer.Writer, payload); err != nil {
+			return
+		}
+		if err := buffer.Flush(); err != nil {
+			return
+		}
 	}
-	_ = writeWebSocketFrame(buffer.Writer, payload)
-	_ = buffer.Flush()
 }
 
 func websocketAccept(key string) string {
@@ -277,7 +288,7 @@ func checkWebSocket(path string) error {
 		return err
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
+	_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
 	key := base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
 	_, _ = fmt.Fprintf(connection,
 		"GET %s HTTP/1.1\r\nHost: example.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: %s\r\n\r\n",
@@ -297,12 +308,19 @@ func checkWebSocket(path string) error {
 			break
 		}
 	}
-	if err := writeMaskedWebSocketFrame(connection, []byte("ping")); err != nil {
-		return err
-	}
-	opcode, payload, err := readWebSocketFrame(reader)
-	if err != nil || opcode != 1 || string(payload) != "ping" {
-		return fmt.Errorf("websocket %s echo=%q opcode=%d err=%v", path, payload, opcode, err)
+	for frame := range webSocketSoakFrames {
+		payload := []byte(fmt.Sprintf("ping-%02d", frame))
+		if err := writeMaskedWebSocketFrame(connection, payload); err != nil {
+			return err
+		}
+		opcode, echoed, err := readWebSocketFrame(reader)
+		if err != nil || opcode != 1 || !bytes.Equal(echoed, payload) {
+			return fmt.Errorf(
+				"websocket %s frame=%d echo=%q opcode=%d err=%v",
+				path, frame, echoed, opcode, err,
+			)
+		}
+		time.Sleep(webSocketSoakDelay)
 	}
 	return nil
 }

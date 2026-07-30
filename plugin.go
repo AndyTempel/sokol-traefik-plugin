@@ -52,11 +52,13 @@ type FailureModeConfig struct {
 }
 
 type ClientIPConfig struct {
-	Strategy         string   `json:"strategy,omitempty" yaml:"strategy,omitempty"`
-	CloudflareHeader string   `json:"cloudflareHeader,omitempty" yaml:"cloudflareHeader,omitempty"`
-	CloudflareCIDRs  []string `json:"cloudflareCIDRs,omitempty" yaml:"cloudflareCIDRs,omitempty"`
-	BunnyHeader      string   `json:"bunnyHeader,omitempty" yaml:"bunnyHeader,omitempty"`
-	BunnyCIDRs       []string `json:"bunnyCIDRs,omitempty" yaml:"bunnyCIDRs,omitempty"`
+	Strategy         string `json:"strategy,omitempty" yaml:"strategy,omitempty"`
+	CloudflareHeader string `json:"cloudflareHeader,omitempty" yaml:"cloudflareHeader,omitempty"`
+	// Deprecated: Cloudflare ranges are obtained from Cloudflare automatically.
+	CloudflareCIDRs []string `json:"cloudflareCIDRs,omitempty" yaml:"cloudflareCIDRs,omitempty"`
+	BunnyHeader     string   `json:"bunnyHeader,omitempty" yaml:"bunnyHeader,omitempty"`
+	// Deprecated: Bunny ranges are obtained from Bunny automatically.
+	BunnyCIDRs []string `json:"bunnyCIDRs,omitempty" yaml:"bunnyCIDRs,omitempty"`
 }
 
 type RequestBodyConfig struct {
@@ -111,7 +113,7 @@ func CreateConfig() *Config {
 		ClientIP: ClientIPConfig{
 			Strategy:         "forwarded",
 			CloudflareHeader: "CF-Connecting-IP",
-			BunnyHeader:      "CDN-Real-IP",
+			BunnyHeader:      "X-Real-IP",
 		},
 		RequestBody: RequestBodyConfig{
 			Enabled:        false,
@@ -169,8 +171,6 @@ type runtimeConfig struct {
 	maximumCacheTTL time.Duration
 	openDuration    time.Duration
 	trusted         []*net.IPNet
-	cloudflare      []*net.IPNet
-	bunny           []*net.IPNet
 	responseRoot    string
 }
 
@@ -186,10 +186,11 @@ type Middleware struct {
 	breaker         *circuitBreaker
 	selectedHeads   []string
 	selectedCookies map[string]struct{}
+	providers       *providerRangeStore
 }
 
 // New constructs the middleware using Traefik's plugin contract.
-func New(_ context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
+func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
 	if next == nil {
 		return nil, errors.New("next handler is required")
 	}
@@ -216,7 +217,7 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 	for _, cookie := range config.Request.Cookies {
 		cookies[cookie] = struct{}{}
 	}
-	return &Middleware{
+	middleware := &Middleware{
 		next:            next,
 		name:            name,
 		config:          config,
@@ -227,7 +228,10 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 		breaker:         newCircuitBreaker(config.CircuitBreaker.FailureThreshold, runtime.openDuration),
 		selectedHeads:   headers,
 		selectedCookies: cookies,
-	}, nil
+		providers:       defaultProviderStore,
+	}
+	startDefaultProviderRefresh(ctx)
+	return middleware, nil
 }
 
 func validateConfig(config *Config) (runtimeConfig, error) {
@@ -291,14 +295,6 @@ func validateConfig(config *Config) (runtimeConfig, error) {
 		return networks
 	}
 	result.trusted = parseNetworks("trustedProxies", config.TrustedProxies)
-	result.cloudflare = parseNetworks("clientIP.cloudflareCIDRs", config.ClientIP.CloudflareCIDRs)
-	result.bunny = parseNetworks("clientIP.bunnyCIDRs", config.ClientIP.BunnyCIDRs)
-	if config.ClientIP.Strategy == "cloudflare" && len(result.cloudflare) == 0 {
-		problems = append(problems, "clientIP.cloudflareCIDRs is required in cloudflare mode")
-	}
-	if config.ClientIP.Strategy == "bunny" && len(result.bunny) == 0 {
-		problems = append(problems, "clientIP.bunnyCIDRs is required in bunny mode")
-	}
 	if config.RequestBody.MaximumBytes < 1 || config.RequestBody.MaximumBytes > maximumBodyBytes {
 		problems = append(problems, "requestBody.maximumBytes must be between 1 byte and 1 MiB")
 	}

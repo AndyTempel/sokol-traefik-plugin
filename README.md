@@ -40,10 +40,19 @@ The decision cache is deny-only. It accepts only Agent-authorized block or
 rate-limit responses bound to the exact request, client, Resource, decision
 scope, and policy revision. Allows and challenge tokens are never cached.
 
-Cloudflare and Bunny modes require explicit `cloudflareCIDRs` or `bunnyCIDRs`.
-Their header is trusted only from the matching immediate peer, wins over XFF
-only in that explicit mode, and falls back to the direct peer when malformed.
-The plugin never auto-detects a provider.
+The immediate peer is checked automatically against Cloudflare's official IPv4
+and IPv6 lists and Bunny's official edge and node lists. A verified Cloudflare
+peer may supply `CF-Connecting-IP`; a verified Bunny peer may supply
+`X-Real-IP`. This detection is independent of the base client-IP strategy, so
+CDN-backed and direct sites can share one plugin configuration.
+
+The four fixed HTTPS sources refresh in the background every six hours. Failed
+or malformed refreshes preserve the last-known-good source for at most 48
+hours, after which it fails closed to ordinary direct/forwarded handling.
+Redirects, environment proxies, non-public ranges, oversized responses, and
+ambiguous provider overlap are rejected. No provider fetch occurs on a request
+path. The old provider CIDR fields are accepted but ignored for configuration
+compatibility.
 
 ## Default pages
 

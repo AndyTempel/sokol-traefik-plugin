@@ -79,7 +79,9 @@ func testConfig(t *testing.T, fixture *agentFixture) *Config {
 
 func newMiddleware(t *testing.T, config *Config, next http.Handler) http.Handler {
 	t.Helper()
-	handler, err := New(context.Background(), next, config, "test-sokol")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	handler, err := New(ctx, next, config, "test-sokol")
 	if err != nil {
 		t.Fatal(err)
 	}

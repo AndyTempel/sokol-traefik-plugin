@@ -19,8 +19,7 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		request,
 		m.config.ClientIP,
 		m.runtime.trusted,
-		m.runtime.cloudflare,
-		m.runtime.bunny,
+		m.providers,
 	)
 	if clientIP == nil {
 		m.handleFailure(writer, request, requestID, agentUnavailable)

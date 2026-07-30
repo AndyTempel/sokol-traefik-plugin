@@ -75,20 +75,14 @@ func TestSensitiveHeadersCannotBeSelected(t *testing.T) {
 	}
 }
 
-func TestProviderModesRequireDedicatedPeerCIDRs(t *testing.T) {
+func TestLegacyProviderModesDoNotRequireManualCIDRs(t *testing.T) {
 	for _, strategy := range []string{"cloudflare", "bunny"} {
 		config := CreateConfig()
 		config.ClientIP.Strategy = strategy
-		if _, err := validateConfig(config); err == nil {
-			t.Fatalf("%s mode accepted without provider CIDRs", strategy)
-		}
-		if strategy == "cloudflare" {
-			config.ClientIP.CloudflareCIDRs = []string{"192.0.2.0/24"}
-		} else {
-			config.ClientIP.BunnyCIDRs = []string{"192.0.2.0/24"}
-		}
+		config.ClientIP.CloudflareCIDRs = []string{"ignored-invalid-value"}
+		config.ClientIP.BunnyCIDRs = []string{"also-ignored"}
 		if _, err := validateConfig(config); err != nil {
-			t.Fatalf("%s mode rejected dedicated provider CIDRs: %v", strategy, err)
+			t.Fatalf("%s mode rejected without obsolete provider CIDRs: %v", strategy, err)
 		}
 	}
 }

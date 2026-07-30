@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const maximumForwardedHops = 32
@@ -12,21 +13,32 @@ const maximumForwardedHops = 32
 func extractClientIP(
 	request *http.Request,
 	strategy ClientIPConfig,
-	trusted, cloudflare, bunny []*net.IPNet,
+	trusted []*net.IPNet,
+	providers *providerRangeStore,
 ) (net.IP, error) {
 	direct, err := parseRemoteIP(request.RemoteAddr)
 	if err != nil {
 		return nil, err
 	}
+	provider, ambiguous := providers.providerFor(direct, time.Now())
+	if ambiguous {
+		return direct, errors.New("direct peer belongs to multiple CDN provider lists")
+	}
+	switch provider {
+	case providerCloudflare:
+		return extractProviderIP(request, direct, strategy.CloudflareHeader)
+	case providerBunny:
+		return extractProviderIP(request, direct, strategy.BunnyHeader)
+	}
 	switch strategy.Strategy {
 	case "direct":
 		return direct, nil
-	case "cloudflare":
-		return extractProviderIP(request, direct, strategy.CloudflareHeader, cloudflare)
-	case "bunny":
-		return extractProviderIP(request, direct, strategy.BunnyHeader, bunny)
 	case "forwarded":
 		return extractForwardedIP(request, direct, trusted)
+	case "cloudflare", "bunny":
+		// Legacy explicit provider modes remain accepted. With no verified
+		// provider peer they fail safely to the direct address.
+		return direct, nil
 	default:
 		return direct, nil
 	}
@@ -45,10 +57,7 @@ func parseRemoteIP(value string) (net.IP, error) {
 	return normalizeIP(ip), nil
 }
 
-func extractProviderIP(request *http.Request, direct net.IP, header string, trusted []*net.IPNet) (net.IP, error) {
-	if !ipIsTrusted(direct, trusted) {
-		return direct, nil
-	}
+func extractProviderIP(request *http.Request, direct net.IP, header string) (net.IP, error) {
 	value := strings.TrimSpace(request.Header.Get(header))
 	if value == "" {
 		return direct, nil

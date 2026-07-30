@@ -1,0 +1,31 @@
+services:
+  plugin-install:
+    image: alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+    restart: "no"
+    environment:
+      SOKOL_PLUGIN_VERSION: ${SOKOL_PLUGIN_VERSION:?set SOKOL_PLUGIN_VERSION}
+      SOKOL_PLUGIN_RELEASE_BASE_URL: ${SOKOL_PLUGIN_RELEASE_BASE_URL:-https://git.ksoft.tech/ksoft/sokol-traefik-plugin/releases/download}
+      SOKOL_PLUGIN_ALLOW_REPLACE: "1"
+    volumes:
+      - sokol-plugins:/plugins-local
+      - ../../scripts/install-from-gitea.sh:/usr/local/bin/install-sokol-plugin:ro
+    command:
+      - /usr/local/bin/install-sokol-plugin
+
+  traefik:
+    image: traefik:v3.7.9@sha256:652929a140a32d7cafafb13c6cdfab5376cfeff800f51397b87b524501ed02a8
+    restart: unless-stopped
+    depends_on:
+      plugin-install:
+        condition: service_completed_successfully
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - sokol-plugins:/plugins-local:ro
+      - ./traefik-static.yml:/etc/traefik/traefik.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  sokol-plugins:
+    name: sokol-traefik-plugins

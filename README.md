@@ -7,7 +7,50 @@ synchronize policy, embed a WAF, or buffer downstream responses.
 The runtime uses only the Go standard library and is tested with Traefik
 `v3.7.9` and its embedded Yaegi `v0.16.1`.
 
-## Local installation
+## Versioned installation from Gitea
+
+Every successful push to `main` creates the next stable Semantic Version tag
+and a Gitea release. Releases begin at `v0.1.0` and increment the patch number
+on every push. Each release contains a deterministic runtime-only archive and
+its SHA-256 checksum.
+
+Stock Traefik `v3.7.9` downloads remote plugins only through Traefik's public
+plugin service, whose catalog accepts public GitHub repositories. It cannot be
+pointed at an arbitrary Gitea server. For a self-hosted Gitea repository, use
+the supported local-plugin loader with the versioned installer:
+
+```bash
+cd deploy/gitea
+SOKOL_PLUGIN_VERSION=v0.1.0 docker compose up -d
+```
+
+The one-shot installer downloads the selected immutable release directly from
+Gitea, verifies its checksum, and atomically installs it in the shared
+`plugins-local` volume before Traefik starts. Set
+`SOKOL_PLUGIN_RELEASE_BASE_URL` if the repository is exposed at a different
+URL. See `deploy/gitea/compose.yml` and `deploy/gitea/traefik-static.yml`.
+
+If native `experimental.plugins` catalog installation is wanted later, the
+designated public mirror is
+`github.com/AndyTempel/sokol-traefik-plugin`. Catalog publication requires a
+deliberate module/import-path migration to that identity, a public repository
+with the `traefik-plugin` topic, and mirrored SemVer tags. The Gitea installer
+does not require that migration.
+
+Changing `SOKOL_PLUGIN_VERSION` requires recreating the installer and restarting
+Traefik because Traefik loads plugins only at startup:
+
+```bash
+docker compose run --rm plugin-install
+docker compose restart traefik
+```
+
+The installer is idempotent for an already installed version. The Compose
+example explicitly permits a different checksum-verified version to atomically
+replace the previous one; the standalone installer fails closed unless
+`SOKOL_PLUGIN_ALLOW_REPLACE=1` is set.
+
+## Manual local installation
 
 Place the checkout at:
 
@@ -92,6 +135,8 @@ The falcon silhouette is adapted from the public-domain Openclipart
 ## Verification
 
 ```bash
+./tests/release/run.sh
+
 go test -race -count=1 -timeout=2m ./...
 
 cd tests/yaegi
@@ -101,3 +146,16 @@ go test -count=1 -timeout=2m ./...
 cd ../..
 ./tests/traefik/run.sh
 ```
+
+## Release policy
+
+`main` is the release branch. The Gitea Actions workflow runs all native,
+Yaegi, and pinned Traefik compatibility tests before publishing a release.
+Tags and release assets are created with the workflow's scoped
+`code: write` and `releases: write` token permissions. Existing tags are never
+moved or overwritten.
+
+The release publisher handles concurrent pushes by fetching tags again and
+retrying with the next patch version if another run created the same tag first.
+Release archives exclude tests, fixtures, CI configuration, and development
+scripts.

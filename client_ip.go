@@ -20,27 +20,58 @@ func extractClientIP(
 	if err != nil {
 		return nil, err
 	}
-	provider, ambiguous := providers.providerFor(direct, time.Now())
-	if ambiguous {
-		return direct, errors.New("direct peer belongs to multiple CDN provider lists")
-	}
-	switch provider {
-	case providerCloudflare:
-		return extractProviderIP(request, direct, strategy.CloudflareHeader)
-	case providerBunny:
-		return extractProviderIP(request, direct, strategy.BunnyHeader)
+	now := time.Now()
+	if client, recognized, err := extractRecognizedProviderIP(
+		request, direct, strategy, providers, now,
+	); recognized {
+		return client, err
 	}
 	switch strategy.Strategy {
 	case "direct":
 		return direct, nil
 	case "forwarded":
-		return extractForwardedIP(request, direct, trusted)
+		forwarded, err := extractForwardedIP(request, direct, trusted)
+		if err != nil {
+			return forwarded, err
+		}
+		// Pangolin and similar trusted intermediaries place the actual CDN
+		// peer in XFF. Verify that resolved hop against the official ranges
+		// before accepting the provider-specific client address.
+		if client, recognized, err := extractRecognizedProviderIP(
+			request, forwarded, strategy, providers, now,
+		); recognized {
+			return client, err
+		}
+		return forwarded, nil
 	case "cloudflare", "bunny":
 		// Legacy explicit provider modes remain accepted. With no verified
 		// provider peer they fail safely to the direct address.
 		return direct, nil
 	default:
 		return direct, nil
+	}
+}
+
+func extractRecognizedProviderIP(
+	request *http.Request,
+	peer net.IP,
+	strategy ClientIPConfig,
+	providers *providerRangeStore,
+	now time.Time,
+) (net.IP, bool, error) {
+	provider, ambiguous := providers.providerFor(peer, now)
+	if ambiguous {
+		return peer, true, errors.New("peer belongs to multiple CDN provider lists")
+	}
+	switch provider {
+	case providerCloudflare:
+		client, err := extractProviderIP(request, peer, strategy.CloudflareHeader)
+		return client, true, err
+	case providerBunny:
+		client, err := extractProviderIP(request, peer, strategy.BunnyHeader)
+		return client, true, err
+	default:
+		return peer, false, nil
 	}
 }
 

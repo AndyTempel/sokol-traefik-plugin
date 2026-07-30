@@ -160,6 +160,71 @@ func TestDetectedProviderWinsWhenXFFDisagreesAndNormalizesMappedIPv6(t *testing.
 	}
 }
 
+func TestSmartProviderDetectionBehindTrustedPangolinProxy(t *testing.T) {
+	tests := []struct {
+		name         string
+		providerPeer string
+		header       string
+	}{
+		{
+			name: "cloudflare", providerPeer: "104.16.1.5",
+			header: "CF-Connecting-IP",
+		},
+		{
+			name: "bunny", providerPeer: "185.93.1.5",
+			header: "X-Real-IP",
+		},
+	}
+	store := testProviderStore(t, []string{"104.16.0.0/13"}, []string{"185.93.0.0/16"})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "http://example.test/", nil)
+			request.RemoteAddr = "10.0.0.5:1234"
+			request.Header.Set(
+				"X-Forwarded-For",
+				"203.0.113.200, "+test.providerPeer+", 10.0.0.4",
+			)
+			request.Header.Set(test.header, "203.0.113.9")
+			ip, err := extractClientIP(
+				request,
+				ClientIPConfig{
+					Strategy: "forwarded", CloudflareHeader: "CF-Connecting-IP",
+					BunnyHeader: "X-Real-IP",
+				},
+				mustNetworks(t, "10.0.0.0/8"),
+				store,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ip.String(); got != "203.0.113.9" {
+				t.Fatalf("provider client IP behind trusted proxy = %s", got)
+			}
+		})
+	}
+}
+
+func TestProviderHeaderBehindUntrustedProxyRemainsUntrusted(t *testing.T) {
+	request := httptest.NewRequest("GET", "http://example.test/", nil)
+	request.RemoteAddr = "198.51.100.4:1234"
+	request.Header.Set("X-Forwarded-For", "104.16.1.5")
+	request.Header.Set("CF-Connecting-IP", "203.0.113.9")
+	ip, err := extractClientIP(
+		request,
+		ClientIPConfig{
+			Strategy: "forwarded", CloudflareHeader: "CF-Connecting-IP",
+		},
+		mustNetworks(t, "10.0.0.0/8"),
+		testProviderStore(t, []string{"104.16.0.0/13"}, nil),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ip.String(); got != "198.51.100.4" {
+		t.Fatalf("untrusted proxy granted provider-header trust to %s", got)
+	}
+}
+
 func TestMalformedProviderHeaderFallsBackToDirectPeer(t *testing.T) {
 	request := httptest.NewRequest("GET", "http://example.test/", nil)
 	request.RemoteAddr = "185.93.1.5:1234"

@@ -84,10 +84,13 @@ rate-limit responses bound to the exact request, client, Resource, decision
 scope, and policy revision. Allows and challenge tokens are never cached.
 
 The immediate peer is checked automatically against Cloudflare's official IPv4
-and IPv6 lists and Bunny's official edge and node lists. A verified Cloudflare
-peer may supply `CF-Connecting-IP`; a verified Bunny peer may supply
-`X-Real-IP`. This detection is independent of the base client-IP strategy, so
-CDN-backed and direct sites can share one plugin configuration.
+and IPv6 lists and Bunny's official edge and node lists. With the `forwarded`
+strategy, a provider hop reached by right-to-left traversal through configured
+trusted proxies is checked the same way. This supports Pangolin/Newt and other
+sanitizing intermediaries without trusting provider headers from arbitrary
+peers. A verified Cloudflare hop may supply `CF-Connecting-IP`; a verified
+Bunny hop may supply `X-Real-IP`. CDN-backed and direct sites can therefore
+share one plugin configuration.
 
 The four fixed HTTPS sources refresh in the background every six hours. Failed
 or malformed refreshes preserve the last-known-good source for at most 48

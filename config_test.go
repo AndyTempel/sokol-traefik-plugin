@@ -205,7 +205,7 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 	for _, expected := range [][]byte{
 		[]byte("https://sokol-static.my-k.cloud/v1/sokol.iife.js"),
 		[]byte("https://sokol.my-k.cloud/api/tools/whoami"),
-		[]byte("credentials: 'include'"),
+		[]byte(`credentials:"include"`),
 		[]byte("{{SOKOL_CHALLENGE_AUTO_START}}"),
 		[]byte("disable"),
 		[]byte("ad blocker"),
@@ -221,6 +221,15 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 	for _, legacy := range [][]byte{[]byte("challengeurl="), []byte("challengejson=")} {
 		if bytes.Contains(bytes.ToLower(challenge), legacy) {
 			t.Fatalf("shipped challenge page uses legacy ALTCHA attribute %q", legacy)
+		}
+	}
+	for _, unminified := range [][]byte{
+		[]byte("const root ="),
+		[]byte("dependencyTimer"),
+		[]byte("showDependencyWarning"),
+	} {
+		if bytes.Contains(challenge, unminified) {
+			t.Fatalf("shipped challenge controller was not identifier-mangled: found %q", unminified)
 		}
 	}
 }

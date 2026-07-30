@@ -284,6 +284,11 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 		strings.Contains(pageResponse.Body.String(), "Start verification") {
 		t.Fatal("challenge page rendered a duplicate verification button")
 	}
+	for _, eventName := range []string{"verified", "statechange"} {
+		if !strings.Contains(pageResponse.Body.String(), eventName) {
+			t.Fatalf("challenge page does not handle %s completion", eventName)
+		}
+	}
 
 	createURL := "https://example.test/.sokol/challenge?token=" +
 		url.QueryEscape(token) +

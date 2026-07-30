@@ -3,6 +3,7 @@
   "hostname_cases": [
     {"input": "BÜCHER.Example.", "normalized": "xn--bcher-kva.example"},
     {"input": "*.BÜCHER.Example.", "normalized": "*.xn--bcher-kva.example"},
+    {"input": ".BÜCHER.Example.", "normalized": ".xn--bcher-kva.example"},
     {"input": "192.0.2.10", "normalized": "192.0.2.10"},
     {"input": "::ffff:192.0.2.10", "normalized": "192.0.2.10"},
     {"input": "*.192.0.2.10", "error": true}
@@ -35,13 +36,40 @@
   ],
   "resolution_cases": [
     {
-      "name": "wildcard does not match apex",
+      "name": "single label wildcard does not match apex",
       "host": "example.test",
       "path": "/",
       "resources": [
         {"id": "wildcard", "enabled": true, "hostnames": ["*.example.test"], "path_prefixes": ["/"], "priority": 0}
       ],
       "expected": null
+    },
+    {
+      "name": "single label wildcard does not match deeper subdomain",
+      "host": "a.b.example.test",
+      "path": "/",
+      "resources": [
+        {"id": "single", "enabled": true, "hostnames": ["*.example.test"], "path_prefixes": ["/"], "priority": 0}
+      ],
+      "expected": null
+    },
+    {
+      "name": "suffix wildcard matches apex",
+      "host": "example.test",
+      "path": "/",
+      "resources": [
+        {"id": "suffix", "enabled": true, "hostnames": [".example.test"], "path_prefixes": ["/"], "priority": 0}
+      ],
+      "expected": "suffix"
+    },
+    {
+      "name": "suffix wildcard matches deeper subdomain",
+      "host": "a.b.example.test",
+      "path": "/",
+      "resources": [
+        {"id": "suffix", "enabled": true, "hostnames": [".example.test"], "path_prefixes": ["/"], "priority": 0}
+      ],
+      "expected": "suffix"
     },
     {
       "name": "wildcard and longest path",
@@ -52,6 +80,17 @@
         {"id": "api", "enabled": true, "hostnames": ["api.example.test"], "path_prefixes": ["/v1"], "priority": 0}
       ],
       "expected": "api"
+    },
+    {
+      "name": "exact host outranks every wildcard despite path and priority",
+      "host": "app.example.test",
+      "path": "/api/private",
+      "resources": [
+        {"id": "suffix", "enabled": true, "hostnames": [".example.test"], "path_prefixes": ["/api/private"], "priority": 1000000},
+        {"id": "single", "enabled": true, "hostnames": ["*.example.test"], "path_prefixes": ["/api"], "priority": 1000000},
+        {"id": "exact", "enabled": true, "hostnames": ["app.example.test"], "path_prefixes": ["/"], "priority": -1000000}
+      ],
+      "expected": "exact"
     },
     {
       "name": "path prefix boundary",

@@ -229,6 +229,29 @@ func TestPageSymlinkPolicyAndRootContainment(t *testing.T) {
 	}
 }
 
+func TestMissingCustomChallengePageUsesFunctionalBuiltInFallback(t *testing.T) {
+	root := t.TempDir()
+	config := CreateConfig().Responses
+	config.Root = root
+	config.ChallengeFile = "missing-challenge.html"
+	store := newPageStore(config, root, time.Second)
+	page := string(store.page("challenge", time.Now()))
+	for _, expected := range []string{
+		"{{SOKOL_CHALLENGE_URL}}",
+		"{{SOKOL_CHALLENGE_TOKEN}}",
+		"https://sokol-static.my-k.cloud/v1/sokol.iife.js",
+		`data-sokol-site="{{SOKOL_CHALLENGE_SITE_ID}}"`,
+		`<sokol-captcha id="widget" name="sokol" challenge-url="{{SOKOL_CHALLENGE_URL}}"`,
+		"https://sokol.my-k.cloud/api/tools/whoami",
+		"credentials:'include'",
+		"/verify",
+	} {
+		if !strings.Contains(page, expected) {
+			t.Fatalf("built-in challenge fallback is missing %q", expected)
+		}
+	}
+}
+
 func TestDecisionCacheCardinalityIsBounded(t *testing.T) {
 	cache := newDecisionCache(3, time.Second)
 	now := time.Now()

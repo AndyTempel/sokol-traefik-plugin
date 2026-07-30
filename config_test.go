@@ -184,12 +184,14 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 				t.Fatalf("shipped page %s is missing %q", name, expected)
 			}
 		}
-		if bytes.Contains(content, []byte("http://")) ||
-			bytes.Contains(content, []byte("<script")) {
-			t.Fatalf("shipped page %s contains an insecure dependency or script", name)
+		if bytes.Contains(content, []byte("http://")) {
+			t.Fatalf("shipped page %s contains an insecure dependency", name)
 		}
 		withoutBunny := bytes.ReplaceAll(content, []byte(bunnyStylesheet), nil)
-		if bytes.Contains(withoutBunny, []byte("https://")) {
+		if name != "challenge.html" && bytes.Contains(content, []byte("<script")) {
+			t.Fatalf("shipped page %s unexpectedly contains a script", name)
+		}
+		if name != "challenge.html" && bytes.Contains(withoutBunny, []byte("https://")) {
 			t.Fatalf("shipped page %s contains a non-Bunny remote dependency", name)
 		}
 	}
@@ -199,5 +201,26 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 	}
 	if !bytes.Contains(challenge, []byte("{{SOKOL_CHALLENGE_URL}}")) {
 		t.Fatal("shipped challenge page is missing the challenge URL placeholder")
+	}
+	for _, expected := range [][]byte{
+		[]byte("https://sokol-static.my-k.cloud/v1/sokol.iife.js"),
+		[]byte("https://sokol.my-k.cloud/api/tools/whoami"),
+		[]byte("credentials: 'include'"),
+		[]byte("{{SOKOL_CHALLENGE_AUTO_START}}"),
+		[]byte("disable"),
+		[]byte("ad blocker"),
+	} {
+		if !bytes.Contains(bytes.ToLower(challenge), bytes.ToLower(expected)) {
+			t.Fatalf("shipped challenge page is missing %q", expected)
+		}
+	}
+	if !bytes.Contains(challenge, []byte(`data-sokol-site="{{SOKOL_CHALLENGE_SITE_ID}}"`)) ||
+		!bytes.Contains(challenge, []byte(`<sokol-captcha id="captcha" name="sokol" challenge-url="{{SOKOL_CHALLENGE_URL}}" gate-submit="false" auto="off"`)) {
+		t.Fatal("shipped challenge page does not use the Sokol CAPTCHA component")
+	}
+	for _, legacy := range [][]byte{[]byte("challengeurl="), []byte("challengejson=")} {
+		if bytes.Contains(bytes.ToLower(challenge), legacy) {
+			t.Fatalf("shipped challenge page uses legacy ALTCHA attribute %q", legacy)
+		}
 	}
 }

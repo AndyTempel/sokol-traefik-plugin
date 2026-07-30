@@ -62,9 +62,29 @@ to the configured `responses.root`, which defaults to `/etc/traefik/sokol`.
 Operators can replace any page with bounded custom HTML.
 
 These files are compiled from the `sokol-plugin` section of the KSoft error
-pages project. They contain no runtime scripts and load only Rubik and Rubik
-Dirt from the privacy-focused Bunny Fonts service. The plugin CSP permits only
-that exact font origin in addition to inline page styles.
+pages project. Block, rate-limit, and unavailable pages contain no runtime
+scripts. The challenge page initializes
+`https://sokol-static.my-k.cloud/v1/sokol.iife.js` with the protected Site ID
+and uses Sokol's `<sokol-captcha>` component with a same-origin local challenge
+URL. It also performs a non-blocking credentialed diagnostic against the
+DNT-compatible `https://sokol.my-k.cloud/api/tools/whoami` endpoint. Local
+challenge verification remains available when either central origin is
+unreachable. All pages load Rubik and Rubik Dirt from the privacy-focused
+Bunny Fonts service, and the plugin applies a narrowly scoped CSP.
+
+Challenge creation and verification reserve `/.sokol` by default. Configure a
+different non-root prefix if the protected application already owns that
+namespace:
+
+```yaml
+challenge:
+  pathPrefix: /.sokol
+  maximumBodyBytes: 65536
+```
+
+The component sends the proof only to the local Agent through the plugin. A
+successful response sets the Agent-issued `__Host-sokol_trust` cookie with
+`Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`.
 
 The falcon silhouette is adapted from the public-domain Openclipart
 `GDI-CnC3-logo.svg` artwork.

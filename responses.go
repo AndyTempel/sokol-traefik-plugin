@@ -8,6 +8,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,20 @@ const fallbackPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Request unavailable</title></head><body><main><h1>Request unavailable</h1>
 <p>The request could not be completed.</p><p>Request ID: {{SOKOL_REQUEST_ID}}</p></main></body></html>`
+
+const fallbackChallengePage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<meta name="robots" content="noindex,nofollow"><title>Sokol verification</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#eef6f7;font-family:system-ui,sans-serif}main{width:min(36rem,calc(100% - 2rem));padding:2rem}button{padding:.7rem 1rem}#warning{color:#fde68a}</style></head>
+<body><main id="challenge" data-url="{{SOKOL_CHALLENGE_URL}}" data-token="{{SOKOL_CHALLENGE_TOKEN}}" data-resource="{{SOKOL_CHALLENGE_RESOURCE_ID}}" data-site="{{SOKOL_CHALLENGE_SITE_ID}}" data-path="{{SOKOL_PATH}}" data-auto="{{SOKOL_CHALLENGE_AUTO_START}}">
+<h1>Verification required</h1><p>Sokol needs a brief proof-of-work check.</p>
+<sokol-captcha id="widget" name="sokol" challenge-url="{{SOKOL_CHALLENGE_URL}}" gate-submit="false" auto="off"></sokol-captcha>
+<button id="start" type="button">Start verification</button><p id="status" role="status"></p>
+<p id="warning" hidden>If verification assets are blocked, allow sokol-static.my-k.cloud and sokol.my-k.cloud, or disable the blocker for this site.</p>
+<p>Request ID: {{SOKOL_REQUEST_ID}}</p></main>
+<script nonce="{{SOKOL_CSP_NONCE}}" data-sokol-site="{{SOKOL_CHALLENGE_SITE_ID}}" src="https://sokol-static.my-k.cloud/v1/sokol.iife.js" defer></script>
+<script nonce="{{SOKOL_CSP_NONCE}}">(()=>{const r=document.getElementById('challenge'),w=document.getElementById('widget'),b=document.getElementById('start'),s=document.getElementById('status'),n=document.getElementById('warning');let q=false;const blocked=()=>{n.hidden=false};const fail=()=>{blocked();s.textContent='Verification did not complete.';b.disabled=false;q=false};const run=async()=>{if(q)return;q=true;b.disabled=true;s.textContent='Verifying…';try{const x=await w.verify({timeout:180000}),i=r.querySelector('input[name="sokol"]'),p=x&&x.payload||i&&i.value;if(!p)throw Error('payload');const u=new URL(r.dataset.url,location.href),z=await fetch(u.pathname+'/verify',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({challenge_token:r.dataset.token,resource_id:r.dataset.resource,site_id:r.dataset.site,path:r.dataset.path,payload:p})}),j=await z.json();if(!z.ok||!j.verified)throw Error('rejected');const d=new URL(location.href);d.pathname=r.dataset.path;d.search='';d.hash='';location.assign(d.href)}catch(e){fail()}};b.addEventListener('click',run);const t=setTimeout(fail,8000);customElements.whenDefined('sokol-captcha').then(()=>{clearTimeout(t);if(r.dataset.auto==='true'){b.hidden=true;run()}}).catch(fail);fetch('https://sokol.my-k.cloud/api/tools/whoami',{mode:'cors',cache:'no-store',credentials:'include'}).catch(blocked)})()</script>
+</body></html>`
 
 type pageEntry struct {
 	content   []byte
@@ -60,17 +75,28 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Content-Security-Policy",
 		"default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; "+
-			"img-src 'self' data:; style-src 'unsafe-inline' https://fonts.bunny.net; "+
-			"font-src https://fonts.bunny.net; script-src 'nonce-"+nonce+"'")
+			"img-src 'self' data: https://sokol-static.my-k.cloud; "+
+			"style-src 'unsafe-inline' https://fonts.bunny.net https://sokol-static.my-k.cloud; "+
+			"font-src https://fonts.bunny.net; "+
+			"script-src 'nonce-"+nonce+"' https://sokol-static.my-k.cloud; "+
+			"worker-src blob:; connect-src 'self' https://sokol-static.my-k.cloud https://sokol.my-k.cloud")
+	challengeCreateURL := response.ChallengeURL + "?token=" +
+		url.QueryEscape(response.ChallengeToken) + "&resource=" +
+		url.QueryEscape(response.ResourceID) + "&site=" +
+		url.QueryEscape(response.SiteID) + "&path=" +
+		url.QueryEscape(request.URL.Path)
 	template := string(p.page(response.Decision, time.Now()))
 	replacements := map[string]string{
-		"{{SOKOL_REQUEST_ID}}":      html.EscapeString(response.RequestID),
-		"{{SOKOL_HOST}}":            html.EscapeString(request.Host),
-		"{{SOKOL_PATH}}":            html.EscapeString(request.URL.EscapedPath()),
-		"{{SOKOL_TIMESTAMP}}":       html.EscapeString(time.Now().UTC().Format(time.RFC3339)),
-		"{{SOKOL_CHALLENGE_URL}}":   html.EscapeString(response.ChallengeURL),
-		"{{SOKOL_CHALLENGE_TOKEN}}": html.EscapeString(response.ChallengeToken),
-		"{{SOKOL_CSP_NONCE}}":       html.EscapeString(nonce),
+		"{{SOKOL_REQUEST_ID}}":            html.EscapeString(response.RequestID),
+		"{{SOKOL_HOST}}":                  html.EscapeString(request.Host),
+		"{{SOKOL_PATH}}":                  html.EscapeString(request.URL.EscapedPath()),
+		"{{SOKOL_TIMESTAMP}}":             html.EscapeString(time.Now().UTC().Format(time.RFC3339)),
+		"{{SOKOL_CHALLENGE_URL}}":         html.EscapeString(challengeCreateURL),
+		"{{SOKOL_CHALLENGE_TOKEN}}":       html.EscapeString(response.ChallengeToken),
+		"{{SOKOL_CHALLENGE_RESOURCE_ID}}": html.EscapeString(response.ResourceID),
+		"{{SOKOL_CHALLENGE_SITE_ID}}":     html.EscapeString(response.SiteID),
+		"{{SOKOL_CHALLENGE_AUTO_START}}":  strconv.FormatBool(response.ChallengeAutoStart),
+		"{{SOKOL_CSP_NONCE}}":             html.EscapeString(nonce),
 	}
 	for placeholder, value := range replacements {
 		template = strings.ReplaceAll(template, placeholder, value)
@@ -97,6 +123,9 @@ func (p *pageStore) page(decision string, now time.Time) []byte {
 	content, err := p.load(name)
 	if err != nil {
 		content = []byte(fallbackPage)
+		if decision == "challenge" {
+			content = []byte(fallbackChallengePage)
+		}
 	}
 	p.cache[name] = pageEntry{content: content, nextCheck: now.Add(p.reloadInterval)}
 	return append([]byte(nil), content...)

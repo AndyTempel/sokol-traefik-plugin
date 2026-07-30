@@ -28,6 +28,9 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	if ipError != nil {
 		log.Printf("sokol middleware %q: ignored malformed trusted client IP metadata", m.name)
 	}
+	if m.handleChallengeEndpoint(writer, request, requestID, clientIP) {
+		return
+	}
 	if !validInboundMetadata(request) {
 		m.pages.write(writer, request, evaluationResponse{
 			Decision: "error", Status: http.StatusBadRequest, RequestID: requestID,
@@ -105,6 +108,9 @@ func (m *Middleware) handleDecision(writer http.ResponseWriter, request *http.Re
 		if m.config.FailureMode.ExplicitLocalDeny == "allow" {
 			m.next.ServeHTTP(writer, request)
 			return
+		}
+		if response.Decision == "challenge" {
+			response.ChallengeURL = m.config.Challenge.PathPrefix + "/challenge"
 		}
 		m.pages.write(writer, request, response)
 	default:

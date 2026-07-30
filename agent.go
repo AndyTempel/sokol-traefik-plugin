@@ -35,19 +35,21 @@ type evaluationRequest struct {
 }
 
 type evaluationResponse struct {
-	Decision       string `json:"decision"`
-	Status         int    `json:"status"`
-	RequestID      string `json:"request_id"`
-	PublicReason   string `json:"public_reason"`
-	CacheTTLMS     int    `json:"cache_ttl_ms"`
-	ResourceID     string `json:"resource_id,omitempty"`
-	ChallengeURL   string `json:"challenge_url,omitempty"`
-	ChallengeToken string `json:"challenge_token,omitempty"`
-	Cacheable      bool   `json:"cacheable,omitempty"`
-	CacheKey       string `json:"cache_key,omitempty"`
-	CacheKeyScope  string `json:"cache_key_scope,omitempty"`
-	DecisionScope  string `json:"decision_scope,omitempty"`
-	PolicyRevision uint64 `json:"policy_revision,omitempty"`
+	Decision           string `json:"decision"`
+	Status             int    `json:"status"`
+	RequestID          string `json:"request_id"`
+	PublicReason       string `json:"public_reason"`
+	CacheTTLMS         int    `json:"cache_ttl_ms"`
+	ResourceID         string `json:"resource_id,omitempty"`
+	SiteID             string `json:"site_id,omitempty"`
+	ChallengeURL       string `json:"challenge_url,omitempty"`
+	ChallengeToken     string `json:"challenge_token,omitempty"`
+	ChallengeAutoStart bool   `json:"challenge_auto_start,omitempty"`
+	Cacheable          bool   `json:"cacheable,omitempty"`
+	CacheKey           string `json:"cache_key,omitempty"`
+	CacheKeyScope      string `json:"cache_key_scope,omitempty"`
+	DecisionScope      string `json:"decision_scope,omitempty"`
+	PolicyRevision     uint64 `json:"policy_revision,omitempty"`
 }
 
 type agentErrorKind int
@@ -67,10 +69,12 @@ func (e *agentError) Error() string {
 }
 
 type agentClient struct {
-	client      *http.Client
-	evaluateURL string
-	token       string
-	timeout     time.Duration
+	client             *http.Client
+	evaluateURL        string
+	challengeCreateURL string
+	challengeVerifyURL string
+	token              string
+	timeout            time.Duration
 }
 
 func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.Duration) (*agentClient, error) {
@@ -93,6 +97,8 @@ func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.
 		ExpectContinueTimeout: 100 * time.Millisecond,
 	}
 	evaluateURL := strings.TrimSuffix(endpoint, "/") + "/v1/evaluate"
+	challengeCreateURL := strings.TrimSuffix(endpoint, "/") + "/v1/challenge/create"
+	challengeVerifyURL := strings.TrimSuffix(endpoint, "/") + "/v1/challenge/verify"
 	if parsed.Scheme == "unix" {
 		socketPath := filepath.Clean(parsed.Path)
 		transport.ForceAttemptHTTP2 = false
@@ -100,6 +106,8 @@ func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.
 			return dialer.DialContext(ctx, "unix", socketPath)
 		}
 		evaluateURL = "http://sokol-edge-agent/v1/evaluate"
+		challengeCreateURL = "http://sokol-edge-agent/v1/challenge/create"
+		challengeVerifyURL = "http://sokol-edge-agent/v1/challenge/verify"
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -107,7 +115,11 @@ func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.
 			return errors.New("agent redirects are forbidden")
 		},
 	}
-	return &agentClient{client: client, evaluateURL: evaluateURL, token: token, timeout: requestTimeout}, nil
+	return &agentClient{
+		client: client, evaluateURL: evaluateURL,
+		challengeCreateURL: challengeCreateURL, challengeVerifyURL: challengeVerifyURL,
+		token: token, timeout: requestTimeout,
+	}, nil
 }
 
 func dialLocalAgent(ctx context.Context, dialer *net.Dialer, network, address string) (net.Conn, error) {
@@ -217,7 +229,8 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 	if expectedStatus != 0 && response.Status != expectedStatus {
 		return errors.New("local agent status does not match decision")
 	}
-	if !validPublicReason(response.PublicReason) || len(response.ResourceID) > 128 {
+	if !validPublicReason(response.PublicReason) || len(response.ResourceID) > 128 ||
+		len(response.SiteID) > 128 {
 		return errors.New("local agent public fields are invalid")
 	}
 	if response.CacheTTLMS < 0 || response.CacheTTLMS > int(maximumCacheTTL/time.Millisecond) {
@@ -230,6 +243,11 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 	}
 	if len(response.ChallengeToken) > 4096 || strings.ContainsAny(response.ChallengeToken, "\r\n") {
 		return errors.New("local agent challenge token is invalid")
+	}
+	if response.Decision == "challenge" &&
+		(response.ChallengeURL == "" || response.ChallengeToken == "" ||
+			response.ResourceID == "" || response.SiteID == "") {
+		return errors.New("local agent challenge response is incomplete")
 	}
 	if response.Cacheable {
 		if response.Decision != "block" && response.Decision != "rate_limit" {
@@ -246,6 +264,115 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 	} else if response.CacheKey != "" || response.CacheKeyScope != "" ||
 		response.DecisionScope != "" || response.PolicyRevision != 0 {
 		return errors.New("non-cacheable local response contains cache metadata")
+	}
+	return nil
+}
+
+type challengeContext struct {
+	ResourceID string `json:"resource_id"`
+	SiteID     string `json:"site_id"`
+	ClientIP   string `json:"client_ip"`
+	UserAgent  string `json:"user_agent"`
+	Path       string `json:"path"`
+}
+
+type challengeCreateRequest struct {
+	ChallengeToken string           `json:"challenge_token"`
+	Context        challengeContext `json:"context"`
+}
+
+type challengeVerifyRequest struct {
+	Token   string           `json:"challenge_token"`
+	Payload json.RawMessage  `json:"payload"`
+	Context challengeContext `json:"context"`
+}
+
+type challengeVerifyResponse struct {
+	Verified     bool   `json:"verified"`
+	PublicReason string `json:"public_reason"`
+	CookieName   string `json:"cookie_name,omitempty"`
+	CookieValue  string `json:"cookie_value,omitempty"`
+	CookieMaxAge int    `json:"cookie_max_age,omitempty"`
+}
+
+func (c *agentClient) challengeCreate(
+	parent context.Context,
+	input challengeCreateRequest,
+) (json.RawMessage, error) {
+	var output json.RawMessage
+	if err := c.challengeRequest(parent, c.challengeCreateURL, input, &output); err != nil {
+		return nil, err
+	}
+	if len(output) == 0 {
+		return nil, &agentError{kind: agentMalformed, err: errors.New("local challenge response is empty")}
+	}
+	return output, nil
+}
+
+func (c *agentClient) challengeVerify(
+	parent context.Context,
+	input challengeVerifyRequest,
+) (challengeVerifyResponse, error) {
+	var output challengeVerifyResponse
+	if err := c.challengeRequest(parent, c.challengeVerifyURL, input, &output); err != nil {
+		return challengeVerifyResponse{}, err
+	}
+	if !validPublicReason(output.PublicReason) || output.CookieMaxAge < 0 ||
+		output.CookieMaxAge > 604800 || len(output.CookieValue) > 4096 {
+		return challengeVerifyResponse{}, &agentError{
+			kind: agentMalformed, err: errors.New("local challenge verification response is invalid"),
+		}
+	}
+	if output.Verified && (output.CookieName != "__Host-sokol_trust" ||
+		output.CookieValue == "" || output.CookieMaxAge == 0) {
+		return challengeVerifyResponse{}, &agentError{
+			kind: agentMalformed, err: errors.New("local challenge cookie response is invalid"),
+		}
+	}
+	return output, nil
+}
+
+func (c *agentClient) challengeRequest(
+	parent context.Context,
+	endpoint string,
+	input interface{},
+	output interface{},
+) error {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return &agentError{kind: agentMalformed, err: errors.New("encode local challenge request")}
+	}
+	ctx, cancel := context.WithTimeout(parent, c.timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return &agentError{kind: agentMalformed, err: errors.New("construct local challenge request")}
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	response, err := c.client.Do(request)
+	if err != nil {
+		return &agentError{kind: agentUnavailable, err: fmt.Errorf("local challenge request: %w", err)}
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return &agentError{kind: agentUnavailable, err: fmt.Errorf("local challenge status %d", response.StatusCode)}
+	}
+	contentType := strings.ToLower(response.Header.Get("Content-Type"))
+	if !strings.HasPrefix(contentType, "application/json") {
+		return &agentError{kind: agentMalformed, err: errors.New("local challenge returned non-JSON")}
+	}
+	limited := &io.LimitedReader{R: response.Body, N: maximumAgentResponseBytes + 1}
+	decoder := json.NewDecoder(limited)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); err != nil || limited.N <= 0 {
+		return &agentError{kind: agentMalformed, err: errors.New("decode local challenge response")}
+	}
+	var extra interface{}
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return &agentError{kind: agentMalformed, err: errors.New("local challenge response has trailing data")}
 	}
 	return nil
 }

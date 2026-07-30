@@ -35,6 +35,7 @@ type Config struct {
 	Responses      ResponsesConfig      `json:"responses,omitempty" yaml:"responses,omitempty"`
 	Cache          CacheConfig          `json:"cache,omitempty" yaml:"cache,omitempty"`
 	CircuitBreaker CircuitBreakerConfig `json:"circuitBreaker,omitempty" yaml:"circuitBreaker,omitempty"`
+	Challenge      ChallengeConfig      `json:"challenge,omitempty" yaml:"challenge,omitempty"`
 	ResourceHint   string               `json:"resourceHint,omitempty" yaml:"resourceHint,omitempty"`
 }
 
@@ -94,6 +95,11 @@ type CacheConfig struct {
 type CircuitBreakerConfig struct {
 	FailureThreshold int    `json:"failureThreshold,omitempty" yaml:"failureThreshold,omitempty"`
 	OpenDuration     string `json:"openDuration,omitempty" yaml:"openDuration,omitempty"`
+}
+
+type ChallengeConfig struct {
+	PathPrefix       string `json:"pathPrefix,omitempty" yaml:"pathPrefix,omitempty"`
+	MaximumBodyBytes int64  `json:"maximumBodyBytes,omitempty" yaml:"maximumBodyBytes,omitempty"`
 }
 
 // CreateConfig creates secure, bounded defaults.
@@ -160,6 +166,10 @@ func CreateConfig() *Config {
 		CircuitBreaker: CircuitBreakerConfig{
 			FailureThreshold: 3,
 			OpenDuration:     "5s",
+		},
+		Challenge: ChallengeConfig{
+			PathPrefix:       "/.sokol",
+			MaximumBodyBytes: 64 << 10,
 		},
 	}
 }
@@ -360,6 +370,14 @@ func validateConfig(config *Config) (runtimeConfig, error) {
 	}
 	if config.CircuitBreaker.FailureThreshold < 1 || config.CircuitBreaker.FailureThreshold > 100 {
 		problems = append(problems, "circuitBreaker.failureThreshold must be between 1 and 100")
+	}
+	if !validPathPrefix(config.Challenge.PathPrefix) ||
+		config.Challenge.PathPrefix == "/" ||
+		strings.HasSuffix(config.Challenge.PathPrefix, "/") {
+		problems = append(problems, "challenge.pathPrefix must be a non-root normalized path without a trailing slash")
+	}
+	if config.Challenge.MaximumBodyBytes < 1024 || config.Challenge.MaximumBodyBytes > 256<<10 {
+		problems = append(problems, "challenge.maximumBodyBytes must be between 1 KiB and 256 KiB")
 	}
 	if len(config.ResourceHint) > 128 {
 		problems = append(problems, "resourceHint must not exceed 128 characters")

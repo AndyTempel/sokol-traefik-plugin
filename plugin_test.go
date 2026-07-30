@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -182,6 +184,196 @@ func TestBlockRendersCustomHTMLWithEscapedPlaceholdersAndSecurityHeaders(t *test
 	}
 }
 
+func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
+	token := strings.Repeat("challenge-state-", 8)
+	var createInput challengeCreateRequest
+	var verifyInput challengeVerifyRequest
+	var downstream atomic.Int64
+	agentServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+testToken {
+			http.Error(writer, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/v1/evaluate":
+			var input evaluationRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+				t.Error(err)
+				return
+			}
+			if input.Cookies["__Host-sokol_trust"] == "signed-local-trust" {
+				writeAgentResponse(writer, evaluationResponse{
+					Decision: "allow", Status: 200, RequestID: input.RequestID,
+					PublicReason: "request_allowed",
+				})
+				return
+			}
+			writeAgentResponse(writer, evaluationResponse{
+				Decision: "challenge", Status: 403, RequestID: input.RequestID,
+				PublicReason: "challenge_required", ResourceID: "resource-1",
+				SiteID: "site-1", ChallengeURL: "/.sokol/challenge",
+				ChallengeToken: token, ChallengeAutoStart: true,
+			})
+		case "/v1/challenge/create":
+			if err := json.NewDecoder(request.Body).Decode(&createInput); err != nil {
+				t.Error(err)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"algorithm":  "PBKDF2/SHA-256",
+				"parameters": map[string]any{"salt": "test", "challenge": "test"},
+				"signature":  "test",
+			})
+		case "/v1/challenge/verify":
+			if err := json.NewDecoder(request.Body).Decode(&verifyInput); err != nil {
+				t.Error(err)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(challengeVerifyResponse{
+				Verified: true, PublicReason: "challenge_verified",
+				CookieName:  "__Host-sokol_trust",
+				CookieValue: "signed-local-trust", CookieMaxAge: 3600,
+			})
+		default:
+			http.Error(writer, "unexpected path", http.StatusNotFound)
+		}
+	}))
+	defer agentServer.Close()
+
+	config := testConfig(t, &agentFixture{server: agentServer})
+	pluginRoot, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.Responses.Root = pluginRoot
+	config.Responses.ChallengeFile = "pages/challenge.html"
+	handler := newMiddleware(t, config, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		downstream.Add(1)
+		if !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+			t.Error("allowed request did not preserve WebSocket upgrade")
+		}
+		writer.WriteHeader(http.StatusSwitchingProtocols)
+	}))
+
+	pageRequest := httptest.NewRequest("GET", "https://example.test/private", nil)
+	pageRequest.RemoteAddr = "198.51.100.7:1234"
+	pageRequest.Header.Set("Accept", "text/html")
+	pageResponse := httptest.NewRecorder()
+	handler.ServeHTTP(pageResponse, pageRequest)
+	if pageResponse.Code != http.StatusForbidden ||
+		!strings.Contains(pageResponse.Body.String(), `data-auto-start="true"`) ||
+		strings.Contains(pageResponse.Body.String(), "{{SOKOL_") {
+		t.Fatalf("challenge page was not fully rendered: status=%d", pageResponse.Code)
+	}
+	csp := pageResponse.Header().Get("Content-Security-Policy")
+	for _, origin := range []string{
+		"https://sokol-static.my-k.cloud",
+		"https://sokol.my-k.cloud",
+		"https://fonts.bunny.net",
+	} {
+		if !strings.Contains(csp, origin) {
+			t.Fatalf("challenge CSP is missing %s: %s", origin, csp)
+		}
+	}
+
+	createURL := "https://example.test/.sokol/challenge?token=" +
+		url.QueryEscape(token) +
+		"&resource=resource-1&site=site-1&path=%2Fprivate"
+	createRequest := httptest.NewRequest("GET", createURL, nil)
+	createRequest.RemoteAddr = "198.51.100.7:1234"
+	createRequest.Header.Set("User-Agent", "browser-test")
+	createResponse := httptest.NewRecorder()
+	handler.ServeHTTP(createResponse, createRequest)
+	if createResponse.Code != http.StatusOK ||
+		createInput.Context.ClientIP != "198.51.100.7" ||
+		createInput.Context.ResourceID != "resource-1" {
+		t.Fatalf("challenge create failed: status=%d input=%#v", createResponse.Code, createInput)
+	}
+
+	verifyBody := `{"challenge_token":` + strconv.Quote(token) +
+		`,"resource_id":"resource-1","site_id":"site-1","path":"/private","payload":"base64-payload"}`
+	verifyRequest := httptest.NewRequest(
+		"POST",
+		"https://example.test/.sokol/challenge/verify",
+		strings.NewReader(verifyBody),
+	)
+	verifyRequest.RemoteAddr = "198.51.100.7:1234"
+	verifyRequest.Header.Set("Origin", "https://example.test")
+	verifyRequest.Header.Set("Content-Type", "application/json")
+	verifyResponse := httptest.NewRecorder()
+	handler.ServeHTTP(verifyResponse, verifyRequest)
+	if verifyResponse.Code != http.StatusOK ||
+		verifyInput.Context.ClientIP != "198.51.100.7" {
+		t.Fatalf("challenge verify failed: status=%d input=%#v", verifyResponse.Code, verifyInput)
+	}
+	cookies := verifyResponse.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "__Host-sokol_trust" ||
+		!cookies[0].Secure || !cookies[0].HttpOnly ||
+		cookies[0].SameSite != http.SameSiteLaxMode ||
+		cookies[0].Path != "/" || cookies[0].MaxAge != 3600 {
+		t.Fatalf("trust cookie attributes = %#v", cookies)
+	}
+
+	websocketRequest := httptest.NewRequest("GET", "https://example.test/socket", nil)
+	websocketRequest.RemoteAddr = "198.51.100.7:1234"
+	websocketRequest.Header.Set("Connection", "Upgrade")
+	websocketRequest.Header.Set("Upgrade", "websocket")
+	websocketRequest.AddCookie(cookies[0])
+	websocketResponse := httptest.NewRecorder()
+	handler.ServeHTTP(websocketResponse, websocketRequest)
+	if websocketResponse.Code != http.StatusSwitchingProtocols ||
+		downstream.Load() != 1 {
+		t.Fatalf(
+			"trusted WebSocket was not preserved: status=%d downstream=%d",
+			websocketResponse.Code,
+			downstream.Load(),
+		)
+	}
+}
+
+func TestChallengeSubmissionRejectsCrossOriginAndOversizedBodies(t *testing.T) {
+	fixture := newAgentFixture(t)
+	config := testConfig(t, fixture)
+	config.Challenge.MaximumBodyBytes = 1024
+	handler := newMiddleware(t, config, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	for _, test := range []struct {
+		name   string
+		origin string
+		body   string
+		status int
+	}{
+		{
+			name: "cross-origin", origin: "https://evil.example",
+			body:   `{"challenge_token":"` + strings.Repeat("x", 32) + `","resource_id":"r","site_id":"s","path":"/","payload":"x"}`,
+			status: http.StatusForbidden,
+		},
+		{
+			name: "oversized", origin: "https://example.test",
+			body: `{"challenge_token":"` + strings.Repeat("x", 32) +
+				`","resource_id":"r","site_id":"s","path":"/","payload":"` +
+				strings.Repeat("x", 1025) + `"}`,
+			status: http.StatusRequestEntityTooLarge,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				"POST",
+				"https://example.test/.sokol/challenge/verify",
+				strings.NewReader(test.body),
+			)
+			request.RemoteAddr = "198.51.100.7:1234"
+			request.Header.Set("Origin", test.origin)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestJSONEnforcementResponseDoesNotLeakAgentInternals(t *testing.T) {
 	fixture := newAgentFixture(t)
 	fixture.handler.Store(agentHandler(func(writer http.ResponseWriter, _ *http.Request, input evaluationRequest) {
@@ -225,13 +417,14 @@ func TestContentNegotiationHonorsQualityValues(t *testing.T) {
 	}
 }
 
-func TestMissingAndOversizedCustomPagesUseFallback(t *testing.T) {
+func TestMissingOversizedAndInvalidUTF8CustomPagesUseFallback(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		writePage bool
+		name string
+		page []byte
 	}{
 		{name: "missing"},
-		{name: "oversized", writePage: true},
+		{name: "oversized", page: bytes.Repeat([]byte("x"), 33)},
+		{name: "invalid-utf8", page: []byte{0xff, 0xfe}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newAgentFixture(t)
@@ -243,10 +436,10 @@ func TestMissingAndOversizedCustomPagesUseFallback(t *testing.T) {
 			}))
 			config := testConfig(t, fixture)
 			config.Responses.MaximumFileBytes = 32
-			if test.writePage {
+			if test.page != nil {
 				if err := os.WriteFile(
 					filepath.Join(config.Responses.Root, config.Responses.BlockFile),
-					bytes.Repeat([]byte("x"), 33), 0o600,
+					test.page, 0o600,
 				); err != nil {
 					t.Fatal(err)
 				}

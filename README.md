@@ -113,7 +113,11 @@ URL. It also performs a non-blocking credentialed diagnostic against the
 DNT-compatible `https://sokol.my-k.cloud/api/tools/whoami` endpoint. Local
 challenge verification remains available when either central origin is
 unreachable. All pages load Rubik and Rubik Dirt from the privacy-focused
-Bunny Fonts service, and the plugin applies a narrowly scoped CSP.
+Bunny Fonts service, and the plugin applies a narrowly scoped CSP. ALTCHA's
+native widget is the only manual verification control; low-risk auto-start and
+manual widget completion share the same local verification path. The CSP
+permits `'wasm-unsafe-eval'` for ALTCHA v3 Argon2 WebAssembly without enabling
+the broader `'unsafe-eval'` capability.
 
 Challenge creation and verification reserve `/.sokol` by default. Configure a
 different non-root prefix if the protected application already owns that

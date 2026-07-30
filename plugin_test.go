@@ -271,10 +271,18 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 		"https://sokol-static.my-k.cloud",
 		"https://sokol.my-k.cloud",
 		"https://fonts.bunny.net",
+		"'wasm-unsafe-eval'",
 	} {
 		if !strings.Contains(csp, origin) {
 			t.Fatalf("challenge CSP is missing %s: %s", origin, csp)
 		}
+	}
+	if strings.Contains(csp, " 'unsafe-eval'") {
+		t.Fatalf("challenge CSP permits broad script evaluation: %s", csp)
+	}
+	if strings.Contains(pageResponse.Body.String(), `id="start"`) ||
+		strings.Contains(pageResponse.Body.String(), "Start verification") {
+		t.Fatal("challenge page rendered a duplicate verification button")
 	}
 
 	createURL := "https://example.test/.sokol/challenge?token=" +

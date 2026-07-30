@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -78,7 +79,7 @@ func TestTransportAndStreamingCompatibilityUsesOriginalWriter(t *testing.T) {
 		{name: "WebDAV", method: "PROPFIND", proto: "HTTP/1.1", protoMajor: 1, expected: "webdav"},
 		{
 			name: "chunked request", method: "POST", proto: "HTTP/1.1", protoMajor: 1,
-			transfer: []string{"chunked"}, expected: "stream",
+			transfer: []string{"chunked"}, expected: "http",
 		},
 	}
 	for _, test := range tests {
@@ -236,8 +237,11 @@ func TestDecisionCacheCardinalityIsBounded(t *testing.T) {
 			ClientIP: "203.0.113.1", Method: "GET", Scheme: "https", Host: "example.test",
 			Path: string(rune('a' + index)), ProtocolType: "http",
 		}
-		cache.put(evaluationCacheKey(request), evaluationResponse{
-			Decision: "allow", Status: 200, PublicReason: "request_allowed", CacheTTLMS: 1000,
+		cache.put(request, evaluationResponse{
+			Decision: "block", Status: 403, PublicReason: "request_blocked",
+			CacheTTLMS: 1000, Cacheable: true, CacheKey: strings.Repeat("a", 64),
+			CacheKeyScope: "request", DecisionScope: "resource:resource-1",
+			PolicyRevision: 1, ResourceID: "resource-1",
 		}, now.Add(time.Duration(index)*time.Microsecond))
 	}
 	cache.mu.Lock()

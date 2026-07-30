@@ -315,6 +315,9 @@ func TestCachedDenyRemainsEffectiveDuringAgentFailure(t *testing.T) {
 		writeAgentResponse(writer, evaluationResponse{
 			Decision: "block", Status: 403, RequestID: input.RequestID,
 			PublicReason: "request_blocked", CacheTTLMS: 1000,
+			Cacheable: true, CacheKey: strings.Repeat("a", 64),
+			CacheKeyScope: "request", DecisionScope: "resource:private-resource",
+			PolicyRevision: 1, ResourceID: "private-resource",
 		})
 	}))
 	config := testConfig(t, fixture)
@@ -333,6 +336,112 @@ func TestCachedDenyRemainsEffectiveDuringAgentFailure(t *testing.T) {
 	}
 	if fixture.requests.Load() != 1 {
 		t.Fatalf("agent requests = %d", fixture.requests.Load())
+	}
+}
+
+func TestWAFAllowCannotPrimeCacheForLaterMaliciousRequest(t *testing.T) {
+	fixture := newAgentFixture(t)
+	fixture.handler.Store(agentHandler(func(writer http.ResponseWriter, _ *http.Request, input evaluationRequest) {
+		response := evaluationResponse{
+			Decision: "allow", Status: 200, RequestID: input.RequestID,
+			PublicReason: "request_allowed",
+		}
+		if bytes.Contains(input.Body, []byte("UNION SELECT")) {
+			response.Decision = "block"
+			response.Status = http.StatusForbidden
+			response.PublicReason = "waf_blocked"
+		}
+		writeAgentResponse(writer, response)
+	}))
+	config := testConfig(t, fixture)
+	config.RequestBody.Enabled = true
+	config.RequestBody.MaximumBytes = 1024
+	var downstream atomic.Int64
+	handler := newMiddleware(t, config, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		downstream.Add(1)
+	}))
+
+	for _, body := range []string{
+		`{"query":"harmless"}`,
+		`{"query":"1 UNION SELECT password FROM users"}`,
+	} {
+		request := httptest.NewRequest("POST", "http://example.test/search", strings.NewReader(body))
+		request.RemoteAddr = "198.51.100.2:1234"
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+	}
+	if fixture.requests.Load() != 2 {
+		t.Fatalf("agent requests = %d, harmless allow primed cache", fixture.requests.Load())
+	}
+	if downstream.Load() != 1 {
+		t.Fatalf("downstream requests = %d", downstream.Load())
+	}
+}
+
+func TestCacheRequiresAgentAuthorizationAndNeverStoresChallengeTokens(t *testing.T) {
+	cache := newDecisionCache(8, time.Second)
+	request := evaluationRequest{
+		RequestID: "one", ClientIP: "192.0.2.1", Method: "GET",
+		Scheme: "https", Host: "example.test", Path: "/", ProtocolType: "http",
+	}
+	now := time.Now()
+	cache.put(request, evaluationResponse{
+		Decision: "block", Status: 403, RequestID: "one",
+		PublicReason: "request_blocked", CacheTTLMS: 1000,
+	}, now)
+	if _, ok := cache.get(request, "two", now); ok {
+		t.Fatal("non-authorized response was cached")
+	}
+	cache.put(request, evaluationResponse{
+		Decision: "challenge", Status: 403, RequestID: "one",
+		PublicReason: "challenge_required", CacheTTLMS: 1000,
+		Cacheable: true, CacheKey: strings.Repeat("a", 64),
+		CacheKeyScope: "request", DecisionScope: "resource:r",
+		PolicyRevision: 1, ResourceID: "r", ChallengeToken: "secret",
+	}, now)
+	if _, ok := cache.get(request, "two", now); ok {
+		t.Fatal("challenge token was cached")
+	}
+}
+
+func TestCacheRequiresAgentAuthorizationAndExactRequestBinding(t *testing.T) {
+	cache := newDecisionCache(16, time.Second)
+	base := evaluationRequest{
+		RequestID: "one", ClientIP: "192.0.2.1", Method: "POST",
+		Scheme: "https", Host: "example.test", Path: "/api/items",
+		Query: "page=1", ProtocolType: "http", HTTPVersion: "1.1",
+		Headers: map[string]string{"Authorization": "Bearer one"},
+		Cookies: map[string]string{"session": "one"},
+		Body:    []byte(`{"value":"one"}`),
+	}
+	cache.put(base, evaluationResponse{
+		Decision: "block", Status: 403, RequestID: "one",
+		PublicReason: "request_blocked", CacheTTLMS: 1000,
+		Cacheable: true, CacheKey: strings.Repeat("a", 64),
+		CacheKeyScope: "request", DecisionScope: "resource:r",
+		PolicyRevision: 7, ResourceID: "r",
+	}, time.Now())
+
+	mutations := []evaluationRequest{
+		base,
+		base,
+		base,
+		base,
+		base,
+	}
+	mutations[0].Path = "/api/admin"
+	mutations[1].Query = "page=2"
+	mutations[2].Headers = map[string]string{"Authorization": "Bearer two"}
+	mutations[3].Cookies = map[string]string{"session": "two"}
+	mutations[4].Body = []byte(`{"value":"two"}`)
+	for index, changed := range mutations {
+		if _, ok := cache.get(changed, "changed", time.Now()); ok {
+			t.Fatalf("mutation %d reused a differently bound decision", index)
+		}
+	}
+	if _, ok := cache.get(base, "two", time.Now()); !ok {
+		t.Fatal("exact request did not reuse its authorized decision")
 	}
 }
 

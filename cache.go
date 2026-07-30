@@ -4,53 +4,74 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
 type decisionCacheEntry struct {
-	response  evaluationResponse
-	expiresAt time.Time
-	createdAt time.Time
+	response           evaluationResponse
+	requestFingerprint string
+	compositeKey       string
+	expiresAt          time.Time
+	createdAt          time.Time
 }
 
 type decisionCache struct {
 	mu             sync.Mutex
 	entries        map[string]decisionCacheEntry
+	requestIndex   map[string]string
 	maximumEntries int
 	maximumTTL     time.Duration
+	latestRevision uint64
 }
 
 func newDecisionCache(maximumEntries int, maximumTTL time.Duration) *decisionCache {
 	return &decisionCache{
 		entries:        make(map[string]decisionCacheEntry),
+		requestIndex:   make(map[string]string),
 		maximumEntries: maximumEntries,
 		maximumTTL:     maximumTTL,
 	}
 }
 
-func (c *decisionCache) get(key, requestID string, now time.Time) (evaluationResponse, bool) {
+func (c *decisionCache) get(request evaluationRequest, requestID string, now time.Time) (evaluationResponse, bool) {
 	if c.maximumEntries == 0 || c.maximumTTL == 0 {
 		return evaluationResponse{}, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entries[key]
+	fingerprint := evaluationCacheKey(request)
+	composite, ok := c.requestIndex[fingerprint]
 	if !ok {
 		return evaluationResponse{}, false
 	}
+	entry, ok := c.entries[composite]
+	if !ok {
+		delete(c.requestIndex, fingerprint)
+		return evaluationResponse{}, false
+	}
 	if !now.Before(entry.expiresAt) {
-		delete(c.entries, key)
+		c.deleteEntry(composite, entry)
+		return evaluationResponse{}, false
+	}
+	if entry.requestFingerprint != fingerprint ||
+		entry.response.PolicyRevision != c.latestRevision {
+		c.deleteEntry(composite, entry)
 		return evaluationResponse{}, false
 	}
 	entry.response.RequestID = requestID
 	return entry.response, true
 }
 
-func (c *decisionCache) put(key string, response evaluationResponse, now time.Time) {
+func (c *decisionCache) put(request evaluationRequest, response evaluationResponse, now time.Time) {
 	if c.maximumEntries == 0 || c.maximumTTL == 0 || response.CacheTTLMS <= 0 ||
-		response.Decision == "challenge" || response.ChallengeToken != "" {
+		!response.Cacheable || response.CacheKeyScope != "request" ||
+		response.CacheKey == "" || response.PolicyRevision == 0 ||
+		response.DecisionScope == "" ||
+		(response.Decision != "block" && response.Decision != "rate_limit") ||
+		response.ChallengeToken != "" {
 		return
 	}
 	ttl := time.Duration(response.CacheTTLMS) * time.Millisecond
@@ -62,12 +83,26 @@ func (c *decisionCache) put(key string, response evaluationResponse, now time.Ti
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if response.PolicyRevision > c.latestRevision {
+		c.entries = make(map[string]decisionCacheEntry)
+		c.requestIndex = make(map[string]string)
+		c.latestRevision = response.PolicyRevision
+	} else if response.PolicyRevision < c.latestRevision {
+		return
+	}
 	for cacheKey, entry := range c.entries {
 		if !now.Before(entry.expiresAt) {
-			delete(c.entries, cacheKey)
+			c.deleteEntry(cacheKey, entry)
 		}
 	}
-	if _, exists := c.entries[key]; !exists && len(c.entries) >= c.maximumEntries {
+	fingerprint := evaluationCacheKey(request)
+	composite := cacheCompositeKey(request, response)
+	if previous, ok := c.requestIndex[fingerprint]; ok && previous != composite {
+		if entry, exists := c.entries[previous]; exists {
+			c.deleteEntry(previous, entry)
+		}
+	}
+	if _, exists := c.entries[composite]; !exists && len(c.entries) >= c.maximumEntries {
 		oldestKey := ""
 		var oldest time.Time
 		for cacheKey, entry := range c.entries {
@@ -76,11 +111,33 @@ func (c *decisionCache) put(key string, response evaluationResponse, now time.Ti
 				oldest = entry.createdAt
 			}
 		}
-		delete(c.entries, oldestKey)
+		if oldestEntry, ok := c.entries[oldestKey]; ok {
+			c.deleteEntry(oldestKey, oldestEntry)
+		}
 	}
-	c.entries[key] = decisionCacheEntry{
-		response: response, expiresAt: now.Add(ttl), createdAt: now,
+	c.entries[composite] = decisionCacheEntry{
+		response: response, requestFingerprint: fingerprint, compositeKey: composite,
+		expiresAt: now.Add(ttl), createdAt: now,
 	}
+	c.requestIndex[fingerprint] = composite
+}
+
+func (c *decisionCache) deleteEntry(key string, entry decisionCacheEntry) {
+	delete(c.entries, key)
+	if c.requestIndex[entry.requestFingerprint] == key {
+		delete(c.requestIndex, entry.requestFingerprint)
+	}
+}
+
+func cacheCompositeKey(request evaluationRequest, response evaluationResponse) string {
+	hash := sha256.New()
+	writeHashPart(hash, evaluationCacheKey(request))
+	writeHashPart(hash, request.ClientIP)
+	writeHashPart(hash, response.ResourceID)
+	writeHashPart(hash, response.DecisionScope)
+	writeHashPart(hash, strconv.FormatUint(response.PolicyRevision, 10))
+	writeHashPart(hash, response.CacheKey)
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 func evaluationCacheKey(request evaluationRequest) string {

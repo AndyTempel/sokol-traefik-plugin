@@ -52,9 +52,11 @@ type FailureModeConfig struct {
 }
 
 type ClientIPConfig struct {
-	Strategy         string `json:"strategy,omitempty" yaml:"strategy,omitempty"`
-	CloudflareHeader string `json:"cloudflareHeader,omitempty" yaml:"cloudflareHeader,omitempty"`
-	BunnyHeader      string `json:"bunnyHeader,omitempty" yaml:"bunnyHeader,omitempty"`
+	Strategy         string   `json:"strategy,omitempty" yaml:"strategy,omitempty"`
+	CloudflareHeader string   `json:"cloudflareHeader,omitempty" yaml:"cloudflareHeader,omitempty"`
+	CloudflareCIDRs  []string `json:"cloudflareCIDRs,omitempty" yaml:"cloudflareCIDRs,omitempty"`
+	BunnyHeader      string   `json:"bunnyHeader,omitempty" yaml:"bunnyHeader,omitempty"`
+	BunnyCIDRs       []string `json:"bunnyCIDRs,omitempty" yaml:"bunnyCIDRs,omitempty"`
 }
 
 type RequestBodyConfig struct {
@@ -167,6 +169,8 @@ type runtimeConfig struct {
 	maximumCacheTTL time.Duration
 	openDuration    time.Duration
 	trusted         []*net.IPNet
+	cloudflare      []*net.IPNet
+	bunny           []*net.IPNet
 	responseRoot    string
 }
 
@@ -271,16 +275,29 @@ func validateConfig(config *Config) (runtimeConfig, error) {
 	if !validHeaderName(config.ClientIP.CloudflareHeader) || !validHeaderName(config.ClientIP.BunnyHeader) {
 		problems = append(problems, "client IP provider headers must be valid HTTP header names")
 	}
-	for _, value := range config.TrustedProxies {
-		_, network, err := net.ParseCIDR(strings.TrimSpace(value))
-		if err != nil {
-			problems = append(problems, "trustedProxies contains an invalid CIDR")
-			continue
+	parseNetworks := func(name string, values []string) []*net.IPNet {
+		var networks []*net.IPNet
+		for _, value := range values {
+			_, network, err := net.ParseCIDR(strings.TrimSpace(value))
+			if err != nil {
+				problems = append(problems, name+" contains an invalid CIDR")
+				continue
+			}
+			networks = append(networks, network)
 		}
-		result.trusted = append(result.trusted, network)
+		if len(values) > 128 {
+			problems = append(problems, name+" must not exceed 128 CIDRs")
+		}
+		return networks
 	}
-	if len(config.TrustedProxies) > 128 {
-		problems = append(problems, "trustedProxies must not exceed 128 CIDRs")
+	result.trusted = parseNetworks("trustedProxies", config.TrustedProxies)
+	result.cloudflare = parseNetworks("clientIP.cloudflareCIDRs", config.ClientIP.CloudflareCIDRs)
+	result.bunny = parseNetworks("clientIP.bunnyCIDRs", config.ClientIP.BunnyCIDRs)
+	if config.ClientIP.Strategy == "cloudflare" && len(result.cloudflare) == 0 {
+		problems = append(problems, "clientIP.cloudflareCIDRs is required in cloudflare mode")
+	}
+	if config.ClientIP.Strategy == "bunny" && len(result.bunny) == 0 {
+		problems = append(problems, "clientIP.bunnyCIDRs is required in bunny mode")
 	}
 	if config.RequestBody.MaximumBytes < 1 || config.RequestBody.MaximumBytes > maximumBodyBytes {
 		problems = append(problems, "requestBody.maximumBytes must be between 1 byte and 1 MiB")

@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "hostname_cases": [
+    {"input": "BÜCHER.Example.", "normalized": "xn--bcher-kva.example"},
+    {"input": "*.BÜCHER.Example.", "normalized": "*.xn--bcher-kva.example"},
+    {"input": "192.0.2.10", "normalized": "192.0.2.10"},
+    {"input": "::ffff:192.0.2.10", "normalized": "192.0.2.10"},
+    {"input": "*.192.0.2.10", "error": true}
+  ],
+  "request_host_cases": [
+    {"input": "BÜCHER.Example.:8443", "normalized": "xn--bcher-kva.example"},
+    {"input": "example.test.", "normalized": "example.test"},
+    {"input": "192.0.2.10:8080", "normalized": "192.0.2.10"},
+    {"input": "[2001:db8::1]:443", "normalized": "2001:db8::1"},
+    {"input": "[::ffff:192.0.2.10]:443", "normalized": "192.0.2.10"},
+    {"input": "user@example.test", "error": true}
+  ],
+  "path_prefix_cases": [
+    {"input": "/api//v1/", "normalized": "/api/v1"},
+    {"input": "/", "normalized": "/"},
+    {"input": "/api/../admin", "error": true}
+  ],
+  "request_path_cases": [
+    {"input": "/api//v1", "normalized": "/api//v1"},
+    {"input": "/api/value", "normalized": "/api/value"},
+    {"input": "/api/./admin", "error": true},
+    {"input": "/api/../admin", "error": true},
+    {"input": "relative", "error": true}
+  ],
+  "raw_path_cases": [
+    {"input": "/api%2Fadmin", "decoded": "/api/admin"},
+    {"input": "/api%252Fadmin", "decoded": "/api%2Fadmin"},
+    {"input": "/caf%C3%A9", "decoded": "/café"},
+    {"input": "/bad%FF", "error": true}
+  ],
+  "resolution_cases": [
+    {
+      "name": "wildcard does not match apex",
+      "host": "example.test",
+      "path": "/",
+      "resources": [
+        {"id": "wildcard", "enabled": true, "hostnames": ["*.example.test"], "path_prefixes": ["/"], "priority": 0}
+      ],
+      "expected": null
+    },
+    {
+      "name": "wildcard and longest path",
+      "host": "api.example.test:443",
+      "path": "/v1/users",
+      "resources": [
+        {"id": "root", "enabled": true, "hostnames": ["*.example.test"], "path_prefixes": ["/"], "priority": 0},
+        {"id": "api", "enabled": true, "hostnames": ["api.example.test"], "path_prefixes": ["/v1"], "priority": 0}
+      ],
+      "expected": "api"
+    },
+    {
+      "name": "path prefix boundary",
+      "host": "example.test",
+      "path": "/application",
+      "resources": [
+        {"id": "app", "enabled": true, "hostnames": ["example.test"], "path_prefixes": ["/app"], "priority": 0}
+      ],
+      "expected": null
+    },
+    {
+      "name": "equal precedence is ambiguous",
+      "host": "example.test",
+      "path": "/api",
+      "resources": [
+        {"id": "one", "enabled": true, "hostnames": ["example.test"], "path_prefixes": ["/api"], "priority": 0},
+        {"id": "two", "enabled": true, "hostnames": ["example.test"], "path_prefixes": ["/api"], "priority": 0}
+      ],
+      "ambiguous": true
+    }
+  ]
+}

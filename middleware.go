@@ -9,12 +9,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	requestID := normalizedRequestID(request.Header.Get("X-Request-ID"))
 	protocol := protocolType(request)
-	clientIP, ipError := extractClientIP(request, m.config.ClientIP, m.runtime.trusted)
+	clientIP, ipError := extractClientIP(
+		request,
+		m.config.ClientIP,
+		m.runtime.trusted,
+		m.runtime.cloudflare,
+		m.runtime.bunny,
+	)
 	if clientIP == nil {
 		m.handleFailure(writer, request, requestID, agentUnavailable)
 		return
@@ -63,9 +70,8 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	if input.Path == "" {
 		input.Path = "/"
 	}
-	key := evaluationCacheKey(input)
 	now := time.Now()
-	if cached, ok := m.cache.get(key, requestID, now); ok {
+	if cached, ok := m.cache.get(input, requestID, now); ok {
 		m.handleDecision(writer, request, cached)
 		return
 	}
@@ -88,7 +94,7 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		m.handleFailure(writer, request, requestID, agentUnavailable)
 		return
 	}
-	m.cache.put(key, response, now)
+	m.cache.put(input, response, now)
 	m.handleDecision(writer, request, response)
 }
 
@@ -171,10 +177,21 @@ func normalizedRequestID(value string) string {
 }
 
 func validInboundMetadata(request *http.Request) bool {
-	return len(request.Method) >= 1 && len(request.Method) <= 32 &&
-		len(request.Host) >= 1 && len(request.Host) <= 253 &&
-		len(request.URL.Path) <= 8192 && len(request.URL.RawQuery) <= 8192 &&
-		!strings.ContainsAny(request.Host, "\r\n\x00")
+	if len(request.Method) < 1 || len(request.Method) > 32 ||
+		len(request.Host) < 1 || len(request.Host) > 253 ||
+		len(request.URL.Path) > 8192 || len(request.URL.RawQuery) > 8192 ||
+		strings.ContainsAny(request.Host, "\r\n\x00") ||
+		!utf8.ValidString(request.URL.Path) ||
+		!strings.HasPrefix(request.URL.Path, "/") ||
+		strings.ContainsAny(request.URL.Path, "\x00?#") {
+		return false
+	}
+	for _, segment := range strings.Split(request.URL.Path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func requestScheme(request *http.Request, trusted []*net.IPNet) string {
@@ -206,9 +223,6 @@ func protocolType(request *http.Request) string {
 	switch strings.ToUpper(request.Method) {
 	case "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", "REPORT", "SEARCH":
 		return "webdav"
-	}
-	if len(request.TransferEncoding) != 0 {
-		return "stream"
 	}
 	return "http"
 }

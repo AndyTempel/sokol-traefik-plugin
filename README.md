@@ -28,6 +28,23 @@ experimental:
 The full dynamic configuration and security model are documented in the Sokol
 backend repository under `docs/edge/traefik-plugin.md`.
 
+## Request security
+
+Ordinary JSON, form, and XML requests remain body-inspectable when HTTP/1.1
+uses chunked transfer encoding. Capture reads at most the configured maximum
+plus one byte and restores the prefix plus unread remainder exactly.
+WebSocket, SSE, streaming gRPC, WebDAV, and explicit upload bypasses are never
+buffered.
+
+The decision cache is deny-only. It accepts only Agent-authorized block or
+rate-limit responses bound to the exact request, client, Resource, decision
+scope, and policy revision. Allows and challenge tokens are never cached.
+
+Cloudflare and Bunny modes require explicit `cloudflareCIDRs` or `bunnyCIDRs`.
+Their header is trusted only from the matching immediate peer, wins over XFF
+only in that explicit mode, and falls back to the direct peer when malformed.
+The plugin never auto-detects a provider.
+
 ## Default pages
 
 The `pages/` directory contains self-contained Sokol-branded defaults for

@@ -75,6 +75,24 @@ func TestSensitiveHeadersCannotBeSelected(t *testing.T) {
 	}
 }
 
+func TestProviderModesRequireDedicatedPeerCIDRs(t *testing.T) {
+	for _, strategy := range []string{"cloudflare", "bunny"} {
+		config := CreateConfig()
+		config.ClientIP.Strategy = strategy
+		if _, err := validateConfig(config); err == nil {
+			t.Fatalf("%s mode accepted without provider CIDRs", strategy)
+		}
+		if strategy == "cloudflare" {
+			config.ClientIP.CloudflareCIDRs = []string{"192.0.2.0/24"}
+		} else {
+			config.ClientIP.BunnyCIDRs = []string{"192.0.2.0/24"}
+		}
+		if _, err := validateConfig(config); err != nil {
+			t.Fatalf("%s mode rejected dedicated provider CIDRs: %v", strategy, err)
+		}
+	}
+}
+
 func TestConfigurationCollectionsAndBodyAreBounded(t *testing.T) {
 	tests := []struct {
 		name   string

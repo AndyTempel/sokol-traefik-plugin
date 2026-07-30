@@ -9,7 +9,11 @@ import (
 
 const maximumForwardedHops = 32
 
-func extractClientIP(request *http.Request, strategy ClientIPConfig, trusted []*net.IPNet) (net.IP, error) {
+func extractClientIP(
+	request *http.Request,
+	strategy ClientIPConfig,
+	trusted, cloudflare, bunny []*net.IPNet,
+) (net.IP, error) {
 	direct, err := parseRemoteIP(request.RemoteAddr)
 	if err != nil {
 		return nil, err
@@ -18,9 +22,9 @@ func extractClientIP(request *http.Request, strategy ClientIPConfig, trusted []*
 	case "direct":
 		return direct, nil
 	case "cloudflare":
-		return extractProviderIP(request, direct, strategy.CloudflareHeader, trusted)
+		return extractProviderIP(request, direct, strategy.CloudflareHeader, cloudflare)
 	case "bunny":
-		return extractProviderIP(request, direct, strategy.BunnyHeader, trusted)
+		return extractProviderIP(request, direct, strategy.BunnyHeader, bunny)
 	case "forwarded":
 		return extractForwardedIP(request, direct, trusted)
 	default:
@@ -38,7 +42,7 @@ func parseRemoteIP(value string) (net.IP, error) {
 	if ip == nil {
 		return nil, errors.New("direct peer address is invalid")
 	}
-	return ip, nil
+	return normalizeIP(ip), nil
 }
 
 func extractProviderIP(request *http.Request, direct net.IP, header string, trusted []*net.IPNet) (net.IP, error) {
@@ -56,7 +60,7 @@ func extractProviderIP(request *http.Request, direct net.IP, header string, trus
 	if ip == nil {
 		return direct, errors.New("provider client IP header is malformed")
 	}
-	return ip, nil
+	return normalizeIP(ip), nil
 }
 
 func extractForwardedIP(request *http.Request, direct net.IP, trusted []*net.IPNet) (net.IP, error) {
@@ -78,7 +82,7 @@ func extractForwardedIP(request *http.Request, direct net.IP, trusted []*net.IPN
 		if ip == nil {
 			return direct, errors.New("forwarded chain contains an invalid address")
 		}
-		hops = append(hops, ip)
+		hops = append(hops, normalizeIP(ip))
 	}
 	current := direct
 	for index := len(hops) - 1; index >= 0; index-- {
@@ -91,10 +95,18 @@ func extractForwardedIP(request *http.Request, direct net.IP, trusted []*net.IPN
 }
 
 func ipIsTrusted(ip net.IP, trusted []*net.IPNet) bool {
+	ip = normalizeIP(ip)
 	for _, network := range trusted {
 		if network.Contains(ip) {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeIP(ip net.IP) net.IP {
+	if ipv4 := ip.To4(); ipv4 != nil {
+		return net.IPv4(ipv4[0], ipv4[1], ipv4[2], ipv4[3]).To4()
+	}
+	return ip.To16()
 }

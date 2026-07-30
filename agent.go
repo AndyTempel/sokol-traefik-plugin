@@ -43,6 +43,11 @@ type evaluationResponse struct {
 	ResourceID     string `json:"resource_id,omitempty"`
 	ChallengeURL   string `json:"challenge_url,omitempty"`
 	ChallengeToken string `json:"challenge_token,omitempty"`
+	Cacheable      bool   `json:"cacheable,omitempty"`
+	CacheKey       string `json:"cache_key,omitempty"`
+	CacheKeyScope  string `json:"cache_key_scope,omitempty"`
+	DecisionScope  string `json:"decision_scope,omitempty"`
+	PolicyRevision uint64 `json:"policy_revision,omitempty"`
 }
 
 type agentErrorKind int
@@ -226,7 +231,33 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 	if len(response.ChallengeToken) > 4096 || strings.ContainsAny(response.ChallengeToken, "\r\n") {
 		return errors.New("local agent challenge token is invalid")
 	}
+	if response.Cacheable {
+		if response.Decision != "block" && response.Decision != "rate_limit" {
+			return errors.New("only local deny decisions may be cached")
+		}
+		if response.CacheTTLMS <= 0 || len(response.CacheKey) != 64 ||
+			response.CacheKeyScope != "request" ||
+			len(response.DecisionScope) < 1 || len(response.DecisionScope) > 256 ||
+			response.PolicyRevision == 0 ||
+			!lowerHex(response.CacheKey) ||
+			strings.ContainsAny(response.DecisionScope, "\r\n\x00") {
+			return errors.New("local agent cache authorization is invalid")
+		}
+	} else if response.CacheKey != "" || response.CacheKeyScope != "" ||
+		response.DecisionScope != "" || response.PolicyRevision != 0 {
+		return errors.New("non-cacheable local response contains cache metadata")
+	}
 	return nil
+}
+
+func lowerHex(value string) bool {
+	for _, character := range value {
+		if (character < '0' || character > '9') &&
+			(character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validPublicReason(value string) bool {

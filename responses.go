@@ -19,12 +19,12 @@ import (
 )
 
 const fallbackPage = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<html lang="en" data-sokol-system-page="edge-response"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Request unavailable</title></head><body><main><h1>Request unavailable</h1>
 <p>The request could not be completed.</p><p>Request ID: {{SOKOL_REQUEST_ID}}</p></main></body></html>`
 
 const fallbackChallengePage = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<html lang="en" data-sokol-system-page="challenge"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta name="robots" content="noindex,nofollow"><title>Sokol verification</title>
 <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#eef6f7;font-family:system-ui,sans-serif}main{width:min(36rem,calc(100% - 2rem));padding:2rem}button{padding:.7rem 1rem}#warning{color:#fde68a}</style></head>
 <body><main id="challenge" data-url="{{SOKOL_CHALLENGE_URL}}" data-token="{{SOKOL_CHALLENGE_TOKEN}}" data-resource="{{SOKOL_CHALLENGE_RESOURCE_ID}}" data-site="{{SOKOL_CHALLENGE_SITE_ID}}" data-path="{{SOKOL_PATH}}" data-auto="{{SOKOL_CHALLENGE_AUTO_START}}">

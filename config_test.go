@@ -175,6 +175,7 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyStaticCDNAssets(t *testing.T) {
 		for _, expected := range [][]byte{
 			[]byte("Sokol"),
 			[]byte("{{SOKOL_REQUEST_ID}}"),
+			[]byte("data-sokol-system-page"),
 			[]byte(fontStylesheet),
 			[]byte("font-family:Rubik Dirt"),
 		} {

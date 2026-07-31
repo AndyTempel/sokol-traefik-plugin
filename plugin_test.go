@@ -172,8 +172,8 @@ func TestBlockRendersCustomHTMLWithEscapedPlaceholdersAndSecurityHeaders(t *test
 		t.Fatal("missing CSP")
 	}
 	for _, expected := range []string{
-		"style-src 'unsafe-inline' https://fonts.bunny.net",
-		"font-src https://fonts.bunny.net",
+		"style-src 'unsafe-inline' https://sokol-static.my-k.cloud",
+		"font-src https://sokol-static.my-k.cloud",
 	} {
 		if !strings.Contains(csp, expected) {
 			t.Fatalf("CSP does not permit the pinned Bunny Fonts origin: %q", csp)
@@ -270,7 +270,7 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 	for _, origin := range []string{
 		"https://sokol-static.my-k.cloud",
 		"https://sokol.my-k.cloud",
-		"https://fonts.bunny.net",
+		"https://sokol-static.my-k.cloud",
 		"'wasm-unsafe-eval'",
 	} {
 		if !strings.Contains(csp, origin) {

@@ -76,8 +76,8 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 	writer.Header().Set("Content-Security-Policy",
 		"default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; "+
 			"img-src 'self' data: https://sokol-static.my-k.cloud; "+
-			"style-src 'unsafe-inline' https://fonts.bunny.net https://sokol-static.my-k.cloud; "+
-			"font-src https://fonts.bunny.net; "+
+			"style-src 'unsafe-inline' https://sokol-static.my-k.cloud; "+
+			"font-src https://sokol-static.my-k.cloud; "+
 			"script-src 'nonce-"+nonce+"' 'wasm-unsafe-eval' https://sokol-static.my-k.cloud; "+
 			"worker-src blob:; connect-src 'self' https://sokol-static.my-k.cloud https://sokol.my-k.cloud")
 	challengeCreateURL := response.ChallengeURL + "?token=" +

@@ -156,8 +156,9 @@ func TestConfigurationCollectionsAndBodyAreBounded(t *testing.T) {
 	}
 }
 
-func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
-	const bunnyStylesheet = "https://fonts.bunny.net/css?family=rubik:400,700|rubik-dirt:400&display=swap"
+func TestShippedSokolPagesAreBoundedAndUseOnlyStaticCDNAssets(t *testing.T) {
+	const fontStylesheet = "https://sokol-static.my-k.cloud/v1/sokol-fonts.css"
+	const noticeScript = "https://sokol-static.my-k.cloud/v1/error-notices.iife.js"
 	for _, name := range []string{
 		"block.html",
 		"challenge.html",
@@ -174,10 +175,7 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 		for _, expected := range [][]byte{
 			[]byte("Sokol"),
 			[]byte("{{SOKOL_REQUEST_ID}}"),
-			[]byte("{{SOKOL_HOST}}"),
-			[]byte("{{SOKOL_PATH}}"),
-			[]byte("{{SOKOL_TIMESTAMP}}"),
-			[]byte(bunnyStylesheet),
+			[]byte(fontStylesheet),
 			[]byte("font-family:Rubik Dirt"),
 		} {
 			if !bytes.Contains(content, expected) {
@@ -187,12 +185,24 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 		if bytes.Contains(content, []byte("http://")) {
 			t.Fatalf("shipped page %s contains an insecure dependency", name)
 		}
-		withoutBunny := bytes.ReplaceAll(content, []byte(bunnyStylesheet), nil)
-		if name != "challenge.html" && bytes.Contains(content, []byte("<script")) {
-			t.Fatalf("shipped page %s unexpectedly contains a script", name)
+		withoutStaticAssets := bytes.ReplaceAll(content, []byte(fontStylesheet), nil)
+		withoutStaticAssets = bytes.ReplaceAll(withoutStaticAssets, []byte(noticeScript), nil)
+		if name == "unavailable.html" && bytes.Contains(content, []byte("<script")) {
+			t.Fatalf("unavailable page %s unexpectedly contains a script", name)
 		}
-		if name != "challenge.html" && bytes.Contains(withoutBunny, []byte("https://")) {
-			t.Fatalf("shipped page %s contains a non-Bunny remote dependency", name)
+		if name != "challenge.html" && bytes.Contains(withoutStaticAssets, []byte("https://")) {
+			t.Fatalf("shipped page %s contains a non-static-CDN remote dependency", name)
+		}
+		for _, removed := range [][]byte{
+			[]byte("{{SOKOL_HOST}}"),
+			[]byte("{{SOKOL_TIMESTAMP}}"),
+			[]byte(">Host<"),
+			[]byte(">Path<"),
+			[]byte(">Time<"),
+		} {
+			if bytes.Contains(content, removed) {
+				t.Fatalf("shipped page %s exposes removed diagnostic metadata %q", name, removed)
+			}
 		}
 	}
 	challenge, err := os.ReadFile(filepath.Join("pages", "challenge.html"))
@@ -201,6 +211,9 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyBunnyFonts(t *testing.T) {
 	}
 	if !bytes.Contains(challenge, []byte("{{SOKOL_CHALLENGE_URL}}")) {
 		t.Fatal("shipped challenge page is missing the challenge URL placeholder")
+	}
+	if !bytes.Contains(challenge, []byte("{{SOKOL_PATH}}")) {
+		t.Fatal("shipped challenge page is missing its operational redirect placeholder")
 	}
 	for _, expected := range [][]byte{
 		[]byte("https://sokol-static.my-k.cloud/v1/sokol.iife.js"),

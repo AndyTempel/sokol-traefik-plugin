@@ -10,3 +10,5 @@ testData:
     tokenFile: /run/secrets/sokol-plugin-token
     connectTimeout: 100ms
     requestTimeout: 500ms
+  challenge:
+    requestTimeout: 2s

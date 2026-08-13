@@ -188,6 +188,7 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 	token := strings.Repeat("challenge-state-", 8)
 	var createInput challengeCreateRequest
 	var verifyInput challengeVerifyRequest
+	var verifyRequestID string
 	var downstream atomic.Int64
 	agentServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer "+testToken {
@@ -226,10 +227,12 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 				"signature":  "test",
 			})
 		case "/v1/challenge/verify":
+			verifyRequestID = request.Header.Get("X-Request-ID")
 			if err := json.NewDecoder(request.Body).Decode(&verifyInput); err != nil {
 				t.Error(err)
 				return
 			}
+			time.Sleep(50 * time.Millisecond)
 			_ = json.NewEncoder(writer).Encode(challengeVerifyResponse{
 				Verified: true, PublicReason: "challenge_verified",
 				CookieName:  "__Host-sokol_trust",
@@ -242,6 +245,8 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 	defer agentServer.Close()
 
 	config := testConfig(t, &agentFixture{server: agentServer})
+	config.Agent.RequestTimeout = "20ms"
+	config.Challenge.RequestTimeout = "500ms"
 	pluginRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +322,8 @@ func TestLocalChallengeBrowserFlowSetsHardenedTrustCookie(t *testing.T) {
 	verifyResponse := httptest.NewRecorder()
 	handler.ServeHTTP(verifyResponse, verifyRequest)
 	if verifyResponse.Code != http.StatusOK ||
-		verifyInput.Context.ClientIP != "198.51.100.7" {
+		verifyInput.Context.ClientIP != "198.51.100.7" ||
+		verifyRequestID == "" {
 		t.Fatalf("challenge verify failed: status=%d input=%#v", verifyResponse.Code, verifyInput)
 	}
 	cookies := verifyResponse.Result().Cookies()

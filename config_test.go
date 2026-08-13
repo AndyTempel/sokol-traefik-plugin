@@ -13,7 +13,8 @@ import (
 func TestSecureDefaultsAndLocalAgentEndpointValidation(t *testing.T) {
 	config := CreateConfig()
 	if config.RequestBody.Enabled || config.FailureMode.ExplicitLocalDeny != "deny" ||
-		config.Responses.AllowSymlinks || config.Agent.RequestTimeout != "500ms" {
+		config.Responses.AllowSymlinks || config.Agent.RequestTimeout != "500ms" ||
+		config.Challenge.RequestTimeout != "2s" {
 		t.Fatalf("unexpected defaults: %#v", config)
 	}
 	for _, endpoint := range []string{
@@ -153,6 +154,22 @@ func TestConfigurationCollectionsAndBodyAreBounded(t *testing.T) {
 				t.Fatal("unbounded configuration was accepted")
 			}
 		})
+	}
+}
+
+func TestChallengeTimeoutIsBoundedAndCoversConnectionTimeout(t *testing.T) {
+	for _, value := range []string{"0s", "6s", "invalid"} {
+		config := CreateConfig()
+		config.Challenge.RequestTimeout = value
+		if _, err := validateConfig(config); err == nil {
+			t.Fatalf("accepted invalid challenge timeout %q", value)
+		}
+	}
+	config := CreateConfig()
+	config.Agent.ConnectTimeout = "1s"
+	config.Challenge.RequestTimeout = "500ms"
+	if _, err := validateConfig(config); err == nil {
+		t.Fatal("challenge timeout shorter than connection timeout was accepted")
 	}
 }
 

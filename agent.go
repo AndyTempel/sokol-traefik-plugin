@@ -75,9 +75,13 @@ type agentClient struct {
 	challengeVerifyURL string
 	token              string
 	timeout            time.Duration
+	challengeTimeout   time.Duration
 }
 
-func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.Duration) (*agentClient, error) {
+func newAgentClient(
+	endpoint, token string,
+	connectTimeout, requestTimeout, challengeTimeout time.Duration,
+) (*agentClient, error) {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
@@ -93,7 +97,6 @@ func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.
 		MaxIdleConnsPerHost:   16,
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   connectTimeout,
-		ResponseHeaderTimeout: requestTimeout,
 		ExpectContinueTimeout: 100 * time.Millisecond,
 	}
 	evaluateURL := strings.TrimSuffix(endpoint, "/") + "/v1/evaluate"
@@ -118,7 +121,7 @@ func newAgentClient(endpoint, token string, connectTimeout, requestTimeout time.
 	return &agentClient{
 		client: client, evaluateURL: evaluateURL,
 		challengeCreateURL: challengeCreateURL, challengeVerifyURL: challengeVerifyURL,
-		token: token, timeout: requestTimeout,
+		token: token, timeout: requestTimeout, challengeTimeout: challengeTimeout,
 	}, nil
 }
 
@@ -297,10 +300,11 @@ type challengeVerifyResponse struct {
 
 func (c *agentClient) challengeCreate(
 	parent context.Context,
+	requestID string,
 	input challengeCreateRequest,
 ) (json.RawMessage, error) {
 	var output json.RawMessage
-	if err := c.challengeRequest(parent, c.challengeCreateURL, input, &output); err != nil {
+	if err := c.challengeRequest(parent, c.challengeCreateURL, requestID, input, &output); err != nil {
 		return nil, err
 	}
 	if len(output) == 0 {
@@ -311,10 +315,11 @@ func (c *agentClient) challengeCreate(
 
 func (c *agentClient) challengeVerify(
 	parent context.Context,
+	requestID string,
 	input challengeVerifyRequest,
 ) (challengeVerifyResponse, error) {
 	var output challengeVerifyResponse
-	if err := c.challengeRequest(parent, c.challengeVerifyURL, input, &output); err != nil {
+	if err := c.challengeRequest(parent, c.challengeVerifyURL, requestID, input, &output); err != nil {
 		return challengeVerifyResponse{}, err
 	}
 	if !validPublicReason(output.PublicReason) || output.CookieMaxAge < 0 ||
@@ -335,6 +340,7 @@ func (c *agentClient) challengeVerify(
 func (c *agentClient) challengeRequest(
 	parent context.Context,
 	endpoint string,
+	requestID string,
 	input interface{},
 	output interface{},
 ) error {
@@ -342,7 +348,7 @@ func (c *agentClient) challengeRequest(
 	if err != nil {
 		return &agentError{kind: agentMalformed, err: errors.New("encode local challenge request")}
 	}
-	ctx, cancel := context.WithTimeout(parent, c.timeout)
+	ctx, cancel := context.WithTimeout(parent, c.challengeTimeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
 	if err != nil {
@@ -351,6 +357,7 @@ func (c *agentClient) challengeRequest(
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-Request-ID", requestID)
 	response, err := c.client.Do(request)
 	if err != nil {
 		return &agentError{kind: agentUnavailable, err: fmt.Errorf("local challenge request: %w", err)}

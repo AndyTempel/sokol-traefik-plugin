@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -62,7 +63,7 @@ func (m *Middleware) challengeCreate(
 		writeChallengeError(writer, http.StatusBadRequest, requestID, "challenge_invalid")
 		return
 	}
-	output, err := m.agent.challengeCreate(request.Context(), challengeCreateRequest{
+	output, err := m.agent.challengeCreate(request.Context(), requestID, challengeCreateRequest{
 		ChallengeToken: token,
 		Context: challengeContext{
 			ResourceID: resourceID, SiteID: siteID, ClientIP: clientIP.String(),
@@ -70,6 +71,10 @@ func (m *Middleware) challengeCreate(
 		},
 	})
 	if err != nil {
+		log.Printf(
+			"sokol middleware %q: challenge creation failed request_id=%s resource_id=%s site_id=%s error=%v",
+			m.name, requestID, resourceID, siteID, err,
+		)
 		writeChallengeError(writer, http.StatusForbidden, requestID, "challenge_invalid")
 		return
 	}
@@ -109,7 +114,7 @@ func (m *Middleware) challengeVerify(
 		writeChallengeError(writer, http.StatusBadRequest, requestID, "challenge_invalid")
 		return
 	}
-	output, err := m.agent.challengeVerify(request.Context(), challengeVerifyRequest{
+	output, err := m.agent.challengeVerify(request.Context(), requestID, challengeVerifyRequest{
 		Token:   input.ChallengeToken,
 		Payload: input.Payload,
 		Context: challengeContext{
@@ -118,6 +123,10 @@ func (m *Middleware) challengeVerify(
 		},
 	})
 	if err != nil {
+		log.Printf(
+			"sokol middleware %q: challenge verification failed request_id=%s resource_id=%s site_id=%s error=%v",
+			m.name, requestID, input.ResourceID, input.SiteID, err,
+		)
 		writeChallengeError(writer, http.StatusServiceUnavailable, requestID, "challenge_verification_error")
 		return
 	}

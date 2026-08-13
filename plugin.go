@@ -19,9 +19,10 @@ import (
 )
 
 const (
-	maximumAgentTimeout = 2 * time.Second
-	maximumBodyBytes    = 1 << 20
-	maximumCacheTTL     = 5 * time.Second
+	maximumAgentTimeout     = 2 * time.Second
+	maximumChallengeTimeout = 5 * time.Second
+	maximumBodyBytes        = 1 << 20
+	maximumCacheTTL         = 5 * time.Second
 )
 
 // Config is the Traefik dynamic middleware configuration.
@@ -100,6 +101,7 @@ type CircuitBreakerConfig struct {
 type ChallengeConfig struct {
 	PathPrefix       string `json:"pathPrefix,omitempty" yaml:"pathPrefix,omitempty"`
 	MaximumBodyBytes int64  `json:"maximumBodyBytes,omitempty" yaml:"maximumBodyBytes,omitempty"`
+	RequestTimeout   string `json:"requestTimeout,omitempty" yaml:"requestTimeout,omitempty"`
 }
 
 // CreateConfig creates secure, bounded defaults.
@@ -170,18 +172,20 @@ func CreateConfig() *Config {
 		Challenge: ChallengeConfig{
 			PathPrefix:       "/.sokol",
 			MaximumBodyBytes: 64 << 10,
+			RequestTimeout:   "2s",
 		},
 	}
 }
 
 type runtimeConfig struct {
-	connectTimeout  time.Duration
-	requestTimeout  time.Duration
-	reloadInterval  time.Duration
-	maximumCacheTTL time.Duration
-	openDuration    time.Duration
-	trusted         []*net.IPNet
-	responseRoot    string
+	connectTimeout   time.Duration
+	requestTimeout   time.Duration
+	challengeTimeout time.Duration
+	reloadInterval   time.Duration
+	maximumCacheTTL  time.Duration
+	openDuration     time.Duration
+	trusted          []*net.IPNet
+	responseRoot     string
 }
 
 // Middleware is the request-scoped Traefik integration.
@@ -215,7 +219,13 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if err != nil {
 		return nil, err
 	}
-	client, err := newAgentClient(config.Agent.Endpoint, token, runtime.connectTimeout, runtime.requestTimeout)
+	client, err := newAgentClient(
+		config.Agent.Endpoint,
+		token,
+		runtime.connectTimeout,
+		runtime.requestTimeout,
+		runtime.challengeTimeout,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -257,8 +267,17 @@ func validateConfig(config *Config) (runtimeConfig, error) {
 	}
 	result.connectTimeout = parseDuration("agent.connectTimeout", config.Agent.ConnectTimeout, time.Millisecond, time.Second)
 	result.requestTimeout = parseDuration("agent.requestTimeout", config.Agent.RequestTimeout, time.Millisecond, maximumAgentTimeout)
+	result.challengeTimeout = parseDuration(
+		"challenge.requestTimeout",
+		config.Challenge.RequestTimeout,
+		time.Millisecond,
+		maximumChallengeTimeout,
+	)
 	if result.requestTimeout > 0 && result.connectTimeout > result.requestTimeout {
 		problems = append(problems, "agent.connectTimeout must not exceed agent.requestTimeout")
+	}
+	if result.challengeTimeout > 0 && result.connectTimeout > result.challengeTimeout {
+		problems = append(problems, "agent.connectTimeout must not exceed challenge.requestTimeout")
 	}
 	result.reloadInterval = parseDuration("responses.reloadInterval", config.Responses.ReloadInterval, time.Second, time.Hour)
 	result.maximumCacheTTL = parseDuration("cache.maximumTTL", config.Cache.MaximumTTL, 0, maximumCacheTTL)

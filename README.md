@@ -130,11 +130,15 @@ namespace:
 challenge:
   pathPrefix: /.sokol
   maximumBodyBytes: 65536
+  requestTimeout: 2s
 ```
 
 The component sends the proof only to the local Agent through the plugin. A
 successful response sets the Agent-issued `__Host-sokol_trust` cookie with
 `Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/`.
+Challenge calls use their own deadline because successful verification includes
+a durable local replay-protection write; ordinary request evaluation retains
+the shorter Agent deadline.
 
 The falcon silhouette is adapted from the public-domain Openclipart
 `GDI-CnC3-logo.svg` artwork.

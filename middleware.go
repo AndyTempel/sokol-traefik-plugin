@@ -15,7 +15,7 @@ import (
 func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	requestID := normalizedRequestID(request.Header.Get("X-Request-ID"))
 	protocol := protocolType(request)
-	clientIP, ipError := extractClientIP(
+	clientIP, clientIPSource, ipError := extractClientIPWithSource(
 		request,
 		m.config.ClientIP,
 		m.runtime.trusted,
@@ -54,20 +54,21 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		body = nil
 	}
 	input := evaluationRequest{
-		RequestID:     requestID,
-		ClientIP:      clientIP.String(),
-		Method:        strings.ToUpper(request.Method),
-		Scheme:        requestScheme(request, m.runtime.trusted),
-		Host:          request.Host,
-		Path:          request.URL.Path,
-		Query:         request.URL.RawQuery,
-		Headers:       m.selectedHeaders(request),
-		Cookies:       m.selectedRequestCookies(request),
-		ProtocolType:  protocol,
-		HTTPVersion:   request.Proto,
-		Body:          body,
-		BodyTruncated: oversized,
-		ResourceHint:  m.config.ResourceHint,
+		RequestID:      requestID,
+		ClientIP:       clientIP.String(),
+		ClientIPSource: clientIPSource,
+		Method:         strings.ToUpper(request.Method),
+		Scheme:         requestScheme(request, m.runtime.trusted),
+		Host:           request.Host,
+		Path:           request.URL.Path,
+		Query:          request.URL.RawQuery,
+		Headers:        m.selectedHeaders(request),
+		Cookies:        m.selectedRequestCookies(request),
+		ProtocolType:   protocol,
+		HTTPVersion:    request.Proto,
+		Body:           body,
+		BodyTruncated:  oversized,
+		ResourceHint:   m.config.ResourceHint,
 	}
 	if input.Path == "" {
 		input.Path = "/"

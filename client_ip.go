@@ -16,23 +16,33 @@ func extractClientIP(
 	trusted []*net.IPNet,
 	providers *providerRangeStore,
 ) (net.IP, error) {
+	client, _, err := extractClientIPWithSource(request, strategy, trusted, providers)
+	return client, err
+}
+
+func extractClientIPWithSource(
+	request *http.Request,
+	strategy ClientIPConfig,
+	trusted []*net.IPNet,
+	providers *providerRangeStore,
+) (net.IP, string, error) {
 	direct, err := parseRemoteIP(request.RemoteAddr)
 	if err != nil {
-		return nil, err
+		return nil, "fallback_error", err
 	}
 	now := time.Now()
 	if client, recognized, err := extractRecognizedProviderIP(
 		request, direct, strategy, providers, now,
 	); recognized {
-		return client, err
+		return client, recognizedProviderSource(direct, providers, now, err), err
 	}
 	switch strategy.Strategy {
 	case "direct":
-		return direct, nil
+		return direct, "direct", nil
 	case "forwarded":
 		forwarded, err := extractForwardedIP(request, direct, trusted)
 		if err != nil {
-			return forwarded, err
+			return forwarded, "fallback_error", err
 		}
 		// Pangolin and similar trusted intermediaries place the actual CDN
 		// peer in XFF. Verify that resolved hop against the official ranges
@@ -40,16 +50,36 @@ func extractClientIP(
 		if client, recognized, err := extractRecognizedProviderIP(
 			request, forwarded, strategy, providers, now,
 		); recognized {
-			return client, err
+			return client, recognizedProviderSource(forwarded, providers, now, err), err
 		}
-		return forwarded, nil
+		if forwarded.Equal(direct) {
+			return forwarded, "direct", nil
+		}
+		return forwarded, "forwarded", nil
 	case "cloudflare", "bunny":
 		// Legacy explicit provider modes remain accepted. With no verified
 		// provider peer they fail safely to the direct address.
-		return direct, nil
+		return direct, "direct", nil
 	default:
-		return direct, nil
+		return direct, "direct", nil
 	}
+}
+
+func recognizedProviderSource(peer net.IP, providers *providerRangeStore, now time.Time, err error) string {
+	if err != nil {
+		return "fallback_error"
+	}
+	provider, ambiguous := providers.providerFor(peer, now)
+	if ambiguous {
+		return "fallback_error"
+	}
+	if provider == providerCloudflare {
+		return "cloudflare"
+	}
+	if provider == providerBunny {
+		return "bunny"
+	}
+	return "fallback_error"
 }
 
 func extractRecognizedProviderIP(

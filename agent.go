@@ -18,20 +18,21 @@ import (
 const maximumAgentResponseBytes = 32 << 10
 
 type evaluationRequest struct {
-	RequestID     string            `json:"request_id"`
-	ClientIP      string            `json:"client_ip"`
-	Method        string            `json:"method"`
-	Scheme        string            `json:"scheme"`
-	Host          string            `json:"host"`
-	Path          string            `json:"path"`
-	Query         string            `json:"query"`
-	Headers       map[string]string `json:"headers"`
-	Cookies       map[string]string `json:"cookies"`
-	ProtocolType  string            `json:"protocol_type"`
-	HTTPVersion   string            `json:"http_version,omitempty"`
-	Body          []byte            `json:"body,omitempty"`
-	BodyTruncated bool              `json:"body_truncated,omitempty"`
-	ResourceHint  string            `json:"resource_hint,omitempty"`
+	RequestID      string            `json:"request_id"`
+	ClientIP       string            `json:"client_ip"`
+	ClientIPSource string            `json:"client_ip_source,omitempty"`
+	Method         string            `json:"method"`
+	Scheme         string            `json:"scheme"`
+	Host           string            `json:"host"`
+	Path           string            `json:"path"`
+	Query          string            `json:"query"`
+	Headers        map[string]string `json:"headers"`
+	Cookies        map[string]string `json:"cookies"`
+	ProtocolType   string            `json:"protocol_type"`
+	HTTPVersion    string            `json:"http_version,omitempty"`
+	Body           []byte            `json:"body,omitempty"`
+	BodyTruncated  bool              `json:"body_truncated,omitempty"`
+	ResourceHint   string            `json:"resource_hint,omitempty"`
 }
 
 type evaluationResponse struct {

@@ -204,6 +204,25 @@ func TestSmartProviderDetectionBehindTrustedPangolinProxy(t *testing.T) {
 	}
 }
 
+func TestBunnySourceBehindTrustedPangolinProxyIsReported(t *testing.T) {
+	request := httptest.NewRequest("GET", "http://example.test/", nil)
+	request.RemoteAddr = "10.0.0.5:1234"
+	request.Header.Set("X-Forwarded-For", "203.0.113.200, 185.93.1.5, 10.0.0.4")
+	request.Header.Set("X-Real-IP", "203.0.113.9")
+	ip, source, err := extractClientIPWithSource(
+		request,
+		ClientIPConfig{Strategy: "forwarded", BunnyHeader: "X-Real-IP"},
+		mustNetworks(t, "10.0.0.0/8"),
+		testProviderStore(t, nil, []string{"185.93.0.0/16"}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ip.String(); got != "203.0.113.9" || source != "bunny" {
+		t.Fatalf("client=%s source=%s", got, source)
+	}
+}
+
 func TestProviderHeaderBehindUntrustedProxyRemainsUntrusted(t *testing.T) {
 	request := httptest.NewRequest("GET", "http://example.test/", nil)
 	request.RemoteAddr = "198.51.100.4:1234"

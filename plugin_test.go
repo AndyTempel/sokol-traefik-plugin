@@ -407,6 +407,7 @@ func TestJSONEnforcementResponseDoesNotLeakAgentInternals(t *testing.T) {
 	request := httptest.NewRequest("GET", "http://api.example.test/items", nil)
 	request.RemoteAddr = "198.51.100.2:1234"
 	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Origin", "https://client.example.test")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusTooManyRequests {
@@ -421,6 +422,23 @@ func TestJSONEnforcementResponseDoesNotLeakAgentInternals(t *testing.T) {
 	}
 	if len(payload) != 4 || payload["public_reason"] != "rate_limited" {
 		t.Fatalf("payload = %#v", payload)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "https://client.example.test" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q", got)
+	}
+	if got := response.Header().Values("Vary"); len(got) != 1 || got[0] != "Origin" {
+		t.Fatalf("Vary = %#v", got)
+	}
+}
+
+func TestJSONEnforcementRejectsInvalidCORSOrigin(t *testing.T) {
+	header := make(http.Header)
+	setJSONCORSHeaders(header, "https://client.example.test/path")
+	if header.Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("invalid origin was reflected: %#v", header)
 	}
 }
 

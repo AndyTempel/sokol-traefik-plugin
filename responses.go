@@ -61,6 +61,7 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 	setEnforcementHeaders(writer.Header())
 	status := enforcementStatus(response)
 	if prefersJSON(request.Header.Get("Accept"), p.config.DefaultFormat) {
+		setJSONCORSHeaders(writer.Header(), request.Header.Get("Origin"))
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 		writer.WriteHeader(status)
 		_ = json.NewEncoder(writer).Encode(map[string]interface{}{
@@ -103,6 +104,19 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 	}
 	writer.WriteHeader(status)
 	_, _ = io.WriteString(writer, template)
+}
+
+func setJSONCORSHeaders(header http.Header, origin string) {
+	origin = strings.TrimSpace(origin)
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return
+	}
+	header.Set("Access-Control-Allow-Origin", origin)
+	header.Set("Access-Control-Allow-Credentials", "true")
+	header.Add("Vary", "Origin")
 }
 
 func (p *pageStore) page(decision string, now time.Time) []byte {

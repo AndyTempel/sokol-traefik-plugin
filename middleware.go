@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -53,22 +52,34 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	if oversized {
 		body = nil
 	}
+	headers, headersTruncated := m.forwarding.forwardedHeaders(request)
+	cookies, cookiesTruncated := m.forwarding.forwardedCookies(request)
 	input := evaluationRequest{
-		RequestID:      requestID,
-		ClientIP:       clientIP.String(),
-		ClientIPSource: clientIPSource,
-		Method:         strings.ToUpper(request.Method),
-		Scheme:         requestScheme(request, m.runtime.trusted),
-		Host:           request.Host,
-		Path:           request.URL.Path,
-		Query:          request.URL.RawQuery,
-		Headers:        m.selectedHeaders(request),
-		Cookies:        m.selectedRequestCookies(request),
-		ProtocolType:   protocol,
-		HTTPVersion:    request.Proto,
-		Body:           body,
-		BodyTruncated:  oversized,
-		ResourceHint:   m.config.ResourceHint,
+		RequestID:          requestID,
+		ClientIP:           clientIP.String(),
+		ClientIPSource:     clientIPSource,
+		Method:             strings.ToUpper(request.Method),
+		Scheme:             requestScheme(request, m.runtime.trusted),
+		Host:               request.Host,
+		Path:               request.URL.Path,
+		Query:              request.URL.RawQuery,
+		Headers:            headers,
+		Cookies:            cookies,
+		HeadersTruncated:   headersTruncated,
+		CookiesTruncated:   cookiesTruncated,
+		AllowlistedHeaders: m.forwarding.allowlistedHeaders,
+		AllowlistedCookies: m.forwarding.allowlistedCookies,
+		ProtocolType:       protocol,
+		HTTPVersion:        request.Proto,
+		Body:               body,
+		BodyTruncated:      oversized,
+		ResourceHint:       m.config.ResourceHint,
+	}
+	if m.forwarding.allHeaders {
+		input.HeaderMode = forwardAll
+	}
+	if m.forwarding.allCookies {
+		input.CookieMode = forwardAll
 	}
 	if input.Path == "" {
 		input.Path = "/"
@@ -135,39 +146,6 @@ func (m *Middleware) handleFailure(writer http.ResponseWriter, request *http.Req
 		Decision: "error", Status: http.StatusServiceUnavailable, RequestID: requestID,
 		PublicReason: reason,
 	})
-}
-
-func (m *Middleware) selectedHeaders(request *http.Request) map[string]string {
-	result := make(map[string]string, len(m.selectedHeads)+2)
-	for _, name := range m.selectedHeads {
-		values := request.Header.Values(name)
-		if len(values) == 0 {
-			continue
-		}
-		value := strings.Join(values, ", ")
-		if len(value) > 4096 {
-			value = value[:4096]
-		}
-		result[strings.ToLower(name)] = value
-	}
-	if request.ContentLength >= 0 &&
-		request.Method != http.MethodGet && request.Method != http.MethodHead {
-		result["content-length"] = strconv.FormatInt(request.ContentLength, 10)
-	}
-	if len(request.TransferEncoding) > 0 {
-		result["transfer-encoding"] = strings.Join(request.TransferEncoding, ", ")
-	}
-	return result
-}
-
-func (m *Middleware) selectedRequestCookies(request *http.Request) map[string]string {
-	result := make(map[string]string, len(m.selectedCookies))
-	for _, cookie := range request.Cookies() {
-		if _, ok := m.selectedCookies[cookie.Name]; ok && len(cookie.Value) <= 4096 {
-			result[cookie.Name] = cookie.Value
-		}
-	}
-	return result
 }
 
 func normalizedRequestID(value string) string {

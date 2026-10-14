@@ -93,7 +93,10 @@ func newMiddleware(t *testing.T, config *Config, next http.Handler) http.Handler
 func TestAllowCallsNextAndSendsBoundedNormalizedMetadata(t *testing.T) {
 	fixture := newAgentFixture(t)
 	var downstream atomic.Int64
-	handler := newMiddleware(t, testConfig(t, fixture), http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	config := testConfig(t, fixture)
+	config.Request.HeaderMode = "allowlist"
+	config.Request.CookieMode = "allowlist"
+	handler := newMiddleware(t, config, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		downstream.Add(1)
 		writer.WriteHeader(http.StatusNoContent)
 	}))
@@ -126,6 +129,10 @@ func TestAllowCallsNextAndSendsBoundedNormalizedMetadata(t *testing.T) {
 	}
 	if input.Cookies["__Host-sokol_trust"] != "trust" || input.Cookies["session"] != "" {
 		t.Fatalf("selected cookies = %#v", input.Cookies)
+	}
+	if input.HeaderMode != "" || input.CookieMode != "" ||
+		len(input.AllowlistedHeaders) != 0 || len(input.AllowlistedCookies) != 0 {
+		t.Fatalf("allowlist mode advertised extended visibility: %#v", input)
 	}
 }
 

@@ -73,6 +73,33 @@ backend repository under `docs/edge/traefik-plugin.md`.
 
 ## Request security
 
+By default the plugin forwards every request header and cookie to the local
+Agent so the WAF can inspect `Cookie`, `Referer`, `Authorization`,
+`X-Forwarded-*`, and custom headers. Forwarding is bounded (128 headers and
+128 cookies, 64 KiB of each, 4096 bytes per value, 128 bytes per name),
+deterministic (configured names first, then sorted), and flagged with
+`headers_truncated`/`cookies_truncated` instead of being rejected. The raw
+`Cookie` header is sent only as parsed cookies.
+
+```yaml
+request:
+  headerMode: all        # or allowlist
+  headers: [Accept, Content-Type, User-Agent, Origin, Sec-Fetch-Dest,
+            Sec-Fetch-Mode, Sec-Fetch-Site, Upgrade, Connection,
+            Sec-WebSocket-Protocol, Sec-WebSocket-Version]
+  cookieMode: all        # or allowlist
+  cookies: [__Host-sokol_trust]
+```
+
+In `all` mode the listed names are the previously visible data whose WAF
+matches keep enforcing; matches only on other headers or cookies follow the
+WAF policy's `extended_data_mode` (`detect_only` by default) in the Agent.
+`allowlist` forwards only the listed names, as before. Upgrade the Agent
+before this plugin: older Agents reject the new fields and more than 64
+headers. Request-body capture stays off by default because it buffers up to
+`requestBody.maximumBytes` per request in memory and delays the upstream;
+enable it per middleware deliberately.
+
 Ordinary JSON, form, and XML requests remain body-inspectable when HTTP/1.1
 uses chunked transfer encoding. Capture reads at most the configured maximum
 plus one byte and restores the prefix plus unread remainder exactly.

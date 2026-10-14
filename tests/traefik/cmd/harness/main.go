@@ -31,6 +31,11 @@ type evaluationRequest struct {
 	HTTPVersion   string `json:"http_version"`
 	Body          []byte `json:"body"`
 	BodyTruncated bool   `json:"body_truncated"`
+
+	Headers    map[string]string `json:"headers"`
+	Cookies    map[string]string `json:"cookies"`
+	HeaderMode string            `json:"header_mode"`
+	CookieMode string            `json:"cookie_mode"`
 }
 
 func main() {
@@ -84,7 +89,11 @@ func runAgent() {
 		decision := "allow"
 		status := http.StatusOK
 		reason := "request_allowed"
-		if input.Path == "/blocked" {
+		forwarded := input.HeaderMode == "all" && input.CookieMode == "all" &&
+			input.Headers["x-harness-probe"] == "custom" &&
+			input.Headers["authorization"] == "Bearer harness" &&
+			input.Cookies["harness"] == "cookie"
+		if input.Path == "/blocked" || input.Path == "/forwarded-metadata" && !forwarded {
 			decision = "block"
 			status = http.StatusForbidden
 			reason = "request_blocked"
@@ -167,6 +176,9 @@ func runChecks(outage bool) error {
 	if err := checkStreaming(client, "/chunked", "first"); err != nil {
 		return err
 	}
+	if err := checkForwardedMetadata(client); err != nil {
+		return err
+	}
 	upload := bytes.Repeat([]byte("u"), 2<<20)
 	if err := expectStatus(client, http.MethodPost, "/uploads/archive", bytes.NewReader(upload), 200, "2097152"); err != nil {
 		return err
@@ -195,6 +207,26 @@ func runChecks(outage bool) error {
 		if err := checkWebSocket(path); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkForwardedMetadata proves that, under Traefik's Yaegi, the default
+// configuration describes custom headers, Authorization and arbitrary cookies
+// to the local Agent; the fixture Agent blocks the path otherwise.
+func checkForwardedMetadata(client *http.Client) error {
+	request, _ := http.NewRequest(http.MethodGet, "http://traefik:8080/forwarded-metadata", nil)
+	request.Header.Set("X-Harness-Probe", "custom")
+	request.Header.Set("Authorization", "Bearer harness")
+	request.AddCookie(&http.Cookie{Name: "harness", Value: "cookie"})
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("forwarded metadata status=%d", response.StatusCode)
 	}
 	return nil
 }

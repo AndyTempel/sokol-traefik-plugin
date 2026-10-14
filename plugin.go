@@ -71,9 +71,18 @@ type RequestBodyConfig struct {
 	BypassPathPrefix []string `json:"bypassPathPrefixes,omitempty" yaml:"bypassPathPrefixes,omitempty"`
 }
 
+// RequestConfig selects the request metadata described to the local Agent.
+//
+// HeaderMode and CookieMode are "all" (default) or "allowlist". In "all"
+// mode every header and cookie is forwarded within fixed bounds, and Headers
+// and Cookies name the previously visible data whose WAF matches keep
+// enforcing; matches only on other data follow the WAF policy's extended-data
+// mode. In "allowlist" mode only the named headers and cookies are forwarded.
 type RequestConfig struct {
-	Headers []string `json:"headers,omitempty" yaml:"headers,omitempty"`
-	Cookies []string `json:"cookies,omitempty" yaml:"cookies,omitempty"`
+	HeaderMode string   `json:"headerMode,omitempty" yaml:"headerMode,omitempty"`
+	Headers    []string `json:"headers,omitempty" yaml:"headers,omitempty"`
+	CookieMode string   `json:"cookieMode,omitempty" yaml:"cookieMode,omitempty"`
+	Cookies    []string `json:"cookies,omitempty" yaml:"cookies,omitempty"`
 }
 
 type ResponsesConfig struct {
@@ -135,20 +144,10 @@ func CreateConfig() *Config {
 			},
 		},
 		Request: RequestConfig{
-			Headers: []string{
-				"Accept",
-				"Content-Type",
-				"User-Agent",
-				"Origin",
-				"Sec-Fetch-Dest",
-				"Sec-Fetch-Mode",
-				"Sec-Fetch-Site",
-				"Upgrade",
-				"Connection",
-				"Sec-WebSocket-Protocol",
-				"Sec-WebSocket-Version",
-			},
-			Cookies: []string{"__Host-sokol_trust"},
+			HeaderMode: forwardAll,
+			Headers:    append([]string(nil), legacyDefaultHeaders...),
+			CookieMode: forwardAll,
+			Cookies:    []string{defaultTrustCookieName},
 		},
 		Responses: ResponsesConfig{
 			Root:             "/etc/traefik/sokol",
@@ -190,17 +189,16 @@ type runtimeConfig struct {
 
 // Middleware is the request-scoped Traefik integration.
 type Middleware struct {
-	next            http.Handler
-	name            string
-	config          *Config
-	runtime         runtimeConfig
-	agent           *agentClient
-	pages           *pageStore
-	cache           *decisionCache
-	breaker         *circuitBreaker
-	selectedHeads   []string
-	selectedCookies map[string]struct{}
-	providers       *providerRangeStore
+	next       http.Handler
+	name       string
+	config     *Config
+	runtime    runtimeConfig
+	agent      *agentClient
+	pages      *pageStore
+	cache      *decisionCache
+	breaker    *circuitBreaker
+	forwarding forwardingPolicy
+	providers  *providerRangeStore
 }
 
 // New constructs the middleware using Traefik's plugin contract.
@@ -229,26 +227,17 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	if err != nil {
 		return nil, err
 	}
-	headers := make([]string, 0, len(config.Request.Headers))
-	for _, header := range config.Request.Headers {
-		headers = append(headers, http.CanonicalHeaderKey(header))
-	}
-	cookies := make(map[string]struct{}, len(config.Request.Cookies))
-	for _, cookie := range config.Request.Cookies {
-		cookies[cookie] = struct{}{}
-	}
 	middleware := &Middleware{
-		next:            next,
-		name:            name,
-		config:          config,
-		runtime:         runtime,
-		agent:           client,
-		pages:           newPageStore(config.Responses, runtime.responseRoot, runtime.reloadInterval),
-		cache:           newDecisionCache(config.Cache.MaximumEntries, runtime.maximumCacheTTL),
-		breaker:         newCircuitBreaker(config.CircuitBreaker.FailureThreshold, runtime.openDuration),
-		selectedHeads:   headers,
-		selectedCookies: cookies,
-		providers:       defaultProviderStore,
+		next:       next,
+		name:       name,
+		config:     config,
+		runtime:    runtime,
+		agent:      client,
+		pages:      newPageStore(config.Responses, runtime.responseRoot, runtime.reloadInterval),
+		cache:      newDecisionCache(config.Cache.MaximumEntries, runtime.maximumCacheTTL),
+		breaker:    newCircuitBreaker(config.CircuitBreaker.FailureThreshold, runtime.openDuration),
+		forwarding: newForwardingPolicy(config.Request),
+		providers:  defaultProviderStore,
 	}
 	startDefaultProviderRefresh(ctx)
 	return middleware, nil
@@ -346,9 +335,18 @@ func validateConfig(config *Config) (runtimeConfig, error) {
 	if len(config.RequestBody.BypassPathPrefix) > 32 {
 		problems = append(problems, "requestBody.bypassPathPrefixes must not exceed 32 entries")
 	}
+	for name, value := range map[string]string{
+		"request.headerMode": config.Request.HeaderMode,
+		"request.cookieMode": config.Request.CookieMode,
+	} {
+		if value != forwardAll && value != forwardAllowlist {
+			problems = append(problems, name+" must be all or allowlist")
+		}
+	}
 	for _, header := range config.Request.Headers {
-		if !validHeaderName(header) || sensitiveRequestHeader(header) {
-			problems = append(problems, "request.headers contains an invalid or sensitive header")
+		if !validHeaderName(header) || len(header) > maximumForwardedNameBytes ||
+			cookieRequestHeader(header) {
+			problems = append(problems, "request.headers contains an invalid header or Cookie; select cookies with request.cookies")
 		}
 	}
 	if len(config.Request.Headers) > 64 {
@@ -475,9 +473,11 @@ func validHeaderName(value string) bool {
 	return true
 }
 
-func sensitiveRequestHeader(value string) bool {
+// cookieRequestHeader reports Cookie-carrying header names, which are always
+// forwarded as parsed cookies rather than as a raw header.
+func cookieRequestHeader(value string) bool {
 	switch strings.ToLower(value) {
-	case "authorization", "proxy-authorization", "cookie", "set-cookie":
+	case "cookie", "set-cookie":
 		return true
 	default:
 		return false

@@ -28,11 +28,20 @@ type evaluationRequest struct {
 	Query          string            `json:"query"`
 	Headers        map[string]string `json:"headers"`
 	Cookies        map[string]string `json:"cookies"`
-	ProtocolType   string            `json:"protocol_type"`
-	HTTPVersion    string            `json:"http_version,omitempty"`
-	Body           []byte            `json:"body,omitempty"`
-	BodyTruncated  bool              `json:"body_truncated,omitempty"`
-	ResourceHint   string            `json:"resource_hint,omitempty"`
+	// HeaderMode/CookieMode are "all" when every value was forwarded and are
+	// omitted for allowlist forwarding, which older Agents understand. In
+	// "all" mode the Allowlisted* names identify previously visible data.
+	HeaderMode         string   `json:"header_mode,omitempty"`
+	CookieMode         string   `json:"cookie_mode,omitempty"`
+	AllowlistedHeaders []string `json:"allowlisted_headers,omitempty"`
+	AllowlistedCookies []string `json:"allowlisted_cookies,omitempty"`
+	HeadersTruncated   bool     `json:"headers_truncated,omitempty"`
+	CookiesTruncated   bool     `json:"cookies_truncated,omitempty"`
+	ProtocolType       string   `json:"protocol_type"`
+	HTTPVersion        string   `json:"http_version,omitempty"`
+	Body               []byte   `json:"body,omitempty"`
+	BodyTruncated      bool     `json:"body_truncated,omitempty"`
+	ResourceHint       string   `json:"resource_hint,omitempty"`
 }
 
 type evaluationResponse struct {

@@ -68,11 +68,40 @@ func TestTokenFileRejectsWorldReadableAndShortValues(t *testing.T) {
 	}
 }
 
-func TestSensitiveHeadersCannotBeSelected(t *testing.T) {
+func TestCookieHeaderCannotBeSelectedAsAHeader(t *testing.T) {
+	for _, name := range []string{"Cookie", "set-cookie"} {
+		config := CreateConfig()
+		config.Request.Headers = append(config.Request.Headers, name)
+		if _, err := validateConfig(config); err == nil {
+			t.Fatalf("%s header selection was accepted", name)
+		}
+	}
 	config := CreateConfig()
-	config.Request.Headers = append(config.Request.Headers, "Authorization")
-	if _, err := validateConfig(config); err == nil {
-		t.Fatal("sensitive header selection was accepted")
+	config.Request.HeaderMode = "allowlist"
+	config.Request.Headers = append(config.Request.Headers, "Authorization", "Referer")
+	if _, err := validateConfig(config); err != nil {
+		t.Fatalf("allowlisting Authorization and Referer was rejected: %v", err)
+	}
+}
+
+func TestRequestForwardingModesAreValidated(t *testing.T) {
+	config := CreateConfig()
+	if config.Request.HeaderMode != "all" || config.Request.CookieMode != "all" {
+		t.Fatalf("default forwarding modes = %q/%q", config.Request.HeaderMode, config.Request.CookieMode)
+	}
+	if config.RequestBody.Enabled {
+		t.Fatal("request body capture must remain opt-in")
+	}
+	for _, change := range []func(*Config){
+		func(config *Config) { config.Request.HeaderMode = "" },
+		func(config *Config) { config.Request.HeaderMode = "everything" },
+		func(config *Config) { config.Request.CookieMode = "ALL" },
+	} {
+		config := CreateConfig()
+		change(config)
+		if _, err := validateConfig(config); err == nil {
+			t.Fatalf("invalid forwarding mode accepted: %#v", config.Request)
+		}
 	}
 }
 

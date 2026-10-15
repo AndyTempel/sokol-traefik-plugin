@@ -154,6 +154,12 @@ func evaluationCacheKey(request evaluationRequest) string {
 	if request.BodyTruncated {
 		writeHashPart(hash, "body-truncated")
 	}
+	if request.HeadersTruncated {
+		writeHashPart(hash, "headers-truncated")
+	}
+	if request.CookiesTruncated {
+		writeHashPart(hash, "cookies-truncated")
+	}
 	writeStringMap(hash, request.Headers)
 	writeStringMap(hash, request.Cookies)
 	if len(request.Body) != 0 {

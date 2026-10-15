@@ -242,7 +242,7 @@ func TestMissingCustomChallengePageUsesFunctionalBuiltInFallback(t *testing.T) {
 		"https://sokol-static.my-k.cloud/v1/sokol.iife.js",
 		`data-sokol-site="{{SOKOL_CHALLENGE_SITE_ID}}"`,
 		`<sokol-captcha id="widget" name="sokol" challenge-url="{{SOKOL_CHALLENGE_URL}}"`,
-		"https://sokol.my-k.cloud/api/tools/whoami",
+		"https://sokol.my-k.cloud/api/tools/identity",
 		"credentials:'include'",
 		"/verify",
 	} {

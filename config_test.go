@@ -235,7 +235,7 @@ func TestShippedSokolPagesAreBoundedAndUseOnlyStaticCDNAssets(t *testing.T) {
 	}
 	for _, expected := range [][]byte{
 		[]byte("https://sokol-static.my-k.cloud/v1/sokol.iife.js"),
-		[]byte("https://sokol.my-k.cloud/api/tools/whoami"),
+		[]byte("https://sokol.my-k.cloud/api/tools/identity"),
 		[]byte(`credentials:"include"`),
 		[]byte("{{SOKOL_CHALLENGE_AUTO_START}}"),
 		[]byte("disable"),

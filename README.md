@@ -113,7 +113,7 @@ scripts. The challenge page initializes
 `https://sokol-static.my-k.cloud/v1/sokol.iife.js` with the protected Site ID
 and uses Sokol's `<sokol-captcha>` component with a same-origin local challenge
 URL. It also performs a non-blocking credentialed diagnostic against the
-DNT-compatible `https://sokol.my-k.cloud/api/tools/whoami` endpoint. Local
+DNT-compatible `https://sokol.my-k.cloud/api/tools/identity` endpoint. Local
 challenge verification remains available when either central origin is
 unreachable. All pages load Rubik and Rubik Dirt from the privacy-focused
 Bunny Fonts service, and the plugin applies a narrowly scoped CSP. ALTCHA's

@@ -17,6 +17,15 @@ import (
 
 const maximumAgentResponseBytes = 32 << 10
 
+// agentFeaturesHeader announces optional response fields this plugin decodes.
+// Agents that predate it never send them; newer Agents omit them for plugins
+// that do not ask, because older plugins decode responses strictly.
+const (
+	agentFeaturesHeader = "X-Sokol-Features"
+	agentFeatures       = "retry-after"
+	maximumRetryAfter   = 86_400
+)
+
 type evaluationRequest struct {
 	RequestID      string            `json:"request_id"`
 	ClientIP       string            `json:"client_ip"`
@@ -60,6 +69,7 @@ type evaluationResponse struct {
 	CacheKeyScope      string `json:"cache_key_scope,omitempty"`
 	DecisionScope      string `json:"decision_scope,omitempty"`
 	PolicyRevision     uint64 `json:"policy_revision,omitempty"`
+	RetryAfterSeconds  int    `json:"retry_after_seconds,omitempty"`
 }
 
 type agentErrorKind int
@@ -186,6 +196,7 @@ func (c *agentClient) evaluate(parent context.Context, input evaluationRequest) 
 	request.Header.Set("Authorization", "Bearer "+c.token)
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
+	request.Header.Set(agentFeaturesHeader, agentFeatures)
 
 	response, err := c.client.Do(request)
 	if err != nil {
@@ -245,6 +256,10 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 	if !validPublicReason(response.PublicReason) || len(response.ResourceID) > 128 ||
 		len(response.SiteID) > 128 {
 		return errors.New("local agent public fields are invalid")
+	}
+	if response.RetryAfterSeconds < 0 || response.RetryAfterSeconds > maximumRetryAfter ||
+		(response.RetryAfterSeconds > 0 && response.Decision != "rate_limit" && response.Decision != "block") {
+		return errors.New("local agent retry-after is invalid")
 	}
 	if response.CacheTTLMS < 0 || response.CacheTTLMS > int(maximumCacheTTL/time.Millisecond) {
 		return errors.New("local agent cache TTL is invalid")

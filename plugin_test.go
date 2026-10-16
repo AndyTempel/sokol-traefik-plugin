@@ -724,3 +724,51 @@ func TestOversizedCapturedBodySignalsTruncationAndRestoresDownstream(t *testing.
 		t.Fatalf("agent body=%d truncated=%t downstream body=%d", len(input.Body), input.BodyTruncated, len(downstreamBody))
 	}
 }
+
+func TestRateLimitRetryAfterIsPassedThroughWithoutBuffering(t *testing.T) {
+	fixture := newAgentFixture(t)
+	features := make(chan string, 4)
+	fixture.handler.Store(agentHandler(func(writer http.ResponseWriter, request *http.Request, input evaluationRequest) {
+		features <- request.Header.Get(agentFeaturesHeader)
+		writeAgentResponse(writer, evaluationResponse{
+			Decision: "rate_limit", Status: 429, RequestID: input.RequestID,
+			PublicReason: "rate_limit_exceeded", RetryAfterSeconds: 7,
+		})
+	}))
+	handler := newMiddleware(t, testConfig(t, fixture), http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("rate-limited request reached downstream")
+	}))
+	for _, accept := range []string{"application/json", "text/html"} {
+		request := httptest.NewRequest("GET", "http://api.example.test/login", nil)
+		request.RemoteAddr = "198.51.100.2:1234"
+		request.Header.Set("Accept", accept)
+		request.Header.Set("Origin", "https://client.example.test")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s: status = %d", accept, response.Code)
+		}
+		if got := response.Header().Get("Retry-After"); got != "7" {
+			t.Fatalf("%s: Retry-After = %q", accept, got)
+		}
+		if got := <-features; got != "retry-after" {
+			t.Fatalf("features header = %q", got)
+		}
+	}
+}
+
+func TestRetryAfterIsRejectedOnNonDenyDecisions(t *testing.T) {
+	for _, response := range []evaluationResponse{
+		{Decision: "allow", Status: 200, RequestID: "r", PublicReason: "request_allowed", RetryAfterSeconds: 5},
+		{Decision: "rate_limit", Status: 429, RequestID: "r", PublicReason: "rate_limit_exceeded", RetryAfterSeconds: maximumRetryAfter + 1},
+		{Decision: "rate_limit", Status: 429, RequestID: "r", PublicReason: "rate_limit_exceeded", RetryAfterSeconds: -1},
+	} {
+		if err := validateEvaluationResponse("r", response); err == nil {
+			t.Fatalf("accepted %#v", response)
+		}
+	}
+	valid := evaluationResponse{Decision: "block", Status: 403, RequestID: "r", PublicReason: "rate_limit_block", RetryAfterSeconds: 300}
+	if err := validateEvaluationResponse("r", valid); err != nil {
+		t.Fatal(err)
+	}
+}

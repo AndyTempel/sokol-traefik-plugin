@@ -110,6 +110,13 @@ The decision cache is deny-only. It accepts only Agent-authorized block or
 rate-limit responses bound to the exact request, client, Resource, decision
 scope, and policy revision. Allows and challenge tokens are never cached.
 
+Evaluation requests carry `X-Sokol-Features: retry-after`. Agents that support
+it may then return `retry_after_seconds` (1–86400, only on `rate_limit` and
+`block` decisions), which the plugin sends as the `Retry-After` header on the
+429 or 403 page and exposes to cross-origin JSON callers. Older Agents ignore
+the header and never send the field. The header is set before the status is
+written; downstream responses are still never buffered.
+
 The immediate peer is checked automatically against Cloudflare's official IPv4
 and IPv6 lists and Bunny's official edge and node lists. With the `forwarded`
 strategy, a provider hop reached by right-to-left traversal through configured

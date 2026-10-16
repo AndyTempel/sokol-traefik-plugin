@@ -119,6 +119,18 @@ peers. A verified Cloudflare hop may supply `CF-Connecting-IP`; a verified
 Bunny hop may supply `X-Real-IP`. CDN-backed and direct sites can therefore
 share one plugin configuration.
 
+When a verified provider hop arrives without its client header, or with a
+header that names a provider node, the visitor address is unknown and the
+request is reported with `client_ip_source` `cdn_unresolved`. The Agent then
+skips per-address behavior scoring, because that node is shared by every
+visitor routed through it; the WAF still inspects the request. The usual cause
+is Traefik itself: an entry point whose `forwardedHeaders.trustedIPs` does not
+cover the CDN strips the CDN's `X-Real-IP` and replaces it with the CDN node's
+address. Either trust the provider ranges on that entry point, or have the CDN
+send the visitor address in a custom header (for Bunny, an edge rule that sets
+a request header to the user IP) and point `clientIP.bunnyHeader` or
+`clientIP.cloudflareHeader` at it. Traefik does not rewrite custom headers.
+
 The four fixed HTTPS sources refresh in the background every six hours. Failed
 or malformed refreshes preserve the last-known-good source for at most 48
 hours, after which it fails closed to ordinary direct/forwarded handling.

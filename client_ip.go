@@ -65,7 +65,17 @@ func extractClientIPWithSource(
 	}
 }
 
+// errProviderClientUnresolved marks a verified CDN peer whose client header
+// is missing or names a CDN node itself. That happens when an intermediate
+// proxy, such as Traefik with forwardedHeaders that do not trust the CDN,
+// replaces X-Real-IP with its own peer. The CDN node is then the only known
+// address, and it is shared by every visitor routed through that node.
+var errProviderClientUnresolved = errors.New("CDN client IP header is missing or names a CDN node")
+
 func recognizedProviderSource(peer net.IP, providers *providerRangeStore, now time.Time, err error) string {
+	if errors.Is(err, errProviderClientUnresolved) {
+		return "cdn_unresolved"
+	}
 	if err != nil {
 		return "fallback_error"
 	}
@@ -93,16 +103,26 @@ func extractRecognizedProviderIP(
 	if ambiguous {
 		return peer, true, errors.New("peer belongs to multiple CDN provider lists")
 	}
+	header := ""
 	switch provider {
 	case providerCloudflare:
-		client, err := extractProviderIP(request, peer, strategy.CloudflareHeader)
-		return client, true, err
+		header = strategy.CloudflareHeader
 	case providerBunny:
-		client, err := extractProviderIP(request, peer, strategy.BunnyHeader)
-		return client, true, err
+		header = strategy.BunnyHeader
 	default:
 		return peer, false, nil
 	}
+	if strings.TrimSpace(request.Header.Get(header)) == "" {
+		return peer, true, errProviderClientUnresolved
+	}
+	client, err := extractProviderIP(request, peer, header)
+	if err != nil {
+		return client, true, err
+	}
+	if clientProvider, _ := providers.providerFor(client, now); clientProvider != providerNone {
+		return peer, true, errProviderClientUnresolved
+	}
+	return client, true, nil
 }
 
 func parseRemoteIP(value string) (net.IP, error) {

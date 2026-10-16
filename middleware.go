@@ -3,6 +3,7 @@ package sokol_traefik_plugin
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"log"
 	"net"
 	"net/http"
@@ -25,7 +26,7 @@ func (m *Middleware) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	if ipError != nil {
-		log.Printf("sokol middleware %q: ignored malformed trusted client IP metadata", m.name)
+		m.logClientIPProblem(ipError)
 	}
 	if m.handleChallengeEndpoint(writer, request, requestID, clientIP) {
 		return
@@ -220,4 +221,26 @@ func headerHasToken(header http.Header, name, token string) bool {
 		}
 	}
 	return false
+}
+
+const clientIPLogInterval = time.Minute
+
+// logClientIPProblem reports client IP resolution problems at most once per
+// interval so a misconfigured proxy cannot flood Traefik's log.
+func (m *Middleware) logClientIPProblem(err error) {
+	now := time.Now()
+	m.clientIPLogMu.Lock()
+	if !m.clientIPLogAt.IsZero() && now.Sub(m.clientIPLogAt) < clientIPLogInterval {
+		m.clientIPLogMu.Unlock()
+		return
+	}
+	m.clientIPLogAt = now
+	m.clientIPLogMu.Unlock()
+	if errors.Is(err, errProviderClientUnresolved) {
+		log.Printf("sokol middleware %q: %v; behavior scoring is skipped for these requests. "+
+			"Trust the CDN ranges in Traefik's entryPoints forwardedHeaders.trustedIPs or send "+
+			"the visitor IP in a custom header (clientIP.bunnyHeader / cloudflareHeader)", m.name, err)
+		return
+	}
+	log.Printf("sokol middleware %q: ignored malformed trusted client IP metadata", m.name)
 }

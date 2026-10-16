@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -199,6 +200,9 @@ type Middleware struct {
 	breaker    *circuitBreaker
 	forwarding forwardingPolicy
 	providers  *providerRangeStore
+
+	clientIPLogMu sync.Mutex
+	clientIPLogAt time.Time
 }
 
 // New constructs the middleware using Traefik's plugin contract.

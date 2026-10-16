@@ -1,6 +1,7 @@
 package sokol_traefik_plugin
 
 import (
+	"errors"
 	"net"
 	"net/http/httptest"
 	"testing"
@@ -325,5 +326,40 @@ func TestDeprecatedManualCIDRsDoNotGrantHeaderTrust(t *testing.T) {
 	}
 	if got := ip.String(); got != "198.51.100.4" {
 		t.Fatalf("deprecated manual CIDR granted trust to %s", got)
+	}
+}
+
+func TestUnresolvedCDNClientIsReportedAsCDNUnresolved(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{name: "missing header", header: ""},
+		// Traefik replaces X-Real-IP with its own peer when the CDN is not
+		// trusted, so the header then names the CDN node itself.
+		{name: "header names the peer", header: "185.93.1.5"},
+		{name: "header names another CDN node", header: "185.93.7.9"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "http://example.test/", nil)
+			request.RemoteAddr = "10.0.0.5:1234"
+			request.Header.Set("X-Forwarded-For", "185.93.1.5")
+			if test.header != "" {
+				request.Header.Set("X-Real-IP", test.header)
+			}
+			ip, source, err := extractClientIPWithSource(
+				request,
+				ClientIPConfig{Strategy: "forwarded", BunnyHeader: "X-Real-IP"},
+				mustNetworks(t, "10.0.0.0/8"),
+				testProviderStore(t, nil, []string{"185.93.0.0/16"}),
+			)
+			if !errors.Is(err, errProviderClientUnresolved) {
+				t.Fatalf("error = %v", err)
+			}
+			if got := ip.String(); got != "185.93.1.5" || source != "cdn_unresolved" {
+				t.Fatalf("client=%s source=%s", got, source)
+			}
+		})
 	}
 }

@@ -110,6 +110,13 @@ The decision cache is deny-only. It accepts only Agent-authorized block or
 rate-limit responses bound to the exact request, client, Resource, decision
 scope, and policy revision. Allows and challenge tokens are never cached.
 
+Evaluation requests carry `X-Sokol-Features: retry-after`. Agents that support
+it may then return `retry_after_seconds` (1–86400, only on `rate_limit` and
+`block` decisions), which the plugin sends as the `Retry-After` header on the
+429 or 403 page and exposes to cross-origin JSON callers. Older Agents ignore
+the header and never send the field. The header is set before the status is
+written; downstream responses are still never buffered.
+
 The immediate peer is checked automatically against Cloudflare's official IPv4
 and IPv6 lists and Bunny's official edge and node lists. With the `forwarded`
 strategy, a provider hop reached by right-to-left traversal through configured
@@ -118,6 +125,18 @@ sanitizing intermediaries without trusting provider headers from arbitrary
 peers. A verified Cloudflare hop may supply `CF-Connecting-IP`; a verified
 Bunny hop may supply `X-Real-IP`. CDN-backed and direct sites can therefore
 share one plugin configuration.
+
+When a verified provider hop arrives without its client header, or with a
+header that names a provider node, the visitor address is unknown and the
+request is reported with `client_ip_source` `cdn_unresolved`. The Agent then
+skips per-address behavior scoring, because that node is shared by every
+visitor routed through it; the WAF still inspects the request. The usual cause
+is Traefik itself: an entry point whose `forwardedHeaders.trustedIPs` does not
+cover the CDN strips the CDN's `X-Real-IP` and replaces it with the CDN node's
+address. Either trust the provider ranges on that entry point, or have the CDN
+send the visitor address in a custom header (for Bunny, an edge rule that sets
+a request header to the user IP) and point `clientIP.bunnyHeader` or
+`clientIP.cloudflareHeader` at it. Traefik does not rewrite custom headers.
 
 The four fixed HTTPS sources refresh in the background every six hours. Failed
 or malformed refreshes preserve the last-known-good source for at most 48
@@ -140,7 +159,7 @@ scripts. The challenge page initializes
 `https://sokol-static.my-k.cloud/v1/sokol.iife.js` with the protected Site ID
 and uses Sokol's `<sokol-captcha>` component with a same-origin local challenge
 URL. It also performs a non-blocking credentialed diagnostic against the
-DNT-compatible `https://sokol.my-k.cloud/api/tools/whoami` endpoint. Local
+DNT-compatible `https://sokol.my-k.cloud/api/tools/identity` endpoint. Local
 challenge verification remains available when either central origin is
 unreachable. All pages load Rubik and Rubik Dirt from the privacy-focused
 Bunny Fonts service, and the plugin applies a narrowly scoped CSP. ALTCHA's

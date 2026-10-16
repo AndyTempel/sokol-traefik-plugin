@@ -60,6 +60,10 @@ func newPageStore(config ResponsesConfig, root string, reloadInterval time.Durat
 func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, response evaluationResponse) {
 	setEnforcementHeaders(writer.Header())
 	status := enforcementStatus(response)
+	if response.RetryAfterSeconds > 0 &&
+		(status == http.StatusTooManyRequests || status == http.StatusForbidden) {
+		writer.Header().Set("Retry-After", strconv.Itoa(response.RetryAfterSeconds))
+	}
 	if prefersJSON(request.Header.Get("Accept"), p.config.DefaultFormat) {
 		setJSONCORSHeaders(writer.Header(), request.Header.Get("Origin"))
 		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -116,6 +120,7 @@ func setJSONCORSHeaders(header http.Header, origin string) {
 	}
 	header.Set("Access-Control-Allow-Origin", origin)
 	header.Set("Access-Control-Allow-Credentials", "true")
+	header.Set("Access-Control-Expose-Headers", "Retry-After")
 	header.Add("Vary", "Origin")
 }
 

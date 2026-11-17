@@ -20,18 +20,27 @@ import (
 
 const fallbackPage = `<!doctype html>
 <html lang="en" data-sokol-system-page="edge-response"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Request unavailable</title></head><body><main><h1>Request unavailable</h1>
-<p>The request could not be completed.</p><p>Request ID: {{SOKOL_REQUEST_ID}}</p></main></body></html>`
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>{{SOKOL_RESPONSE_TITLE}} | Sokol</title>
+<style>body{margin:0;background:#0b1220;color:#eef6f7;font:1rem/1.6 system-ui,sans-serif}main{max-width:42rem;margin:8vh auto;padding:1.5rem;overflow-wrap:anywhere}a{color:#7dd3fc}</style>
+</head><body><main><p>Sokol · Website protection</p><h1>{{SOKOL_RESPONSE_TITLE}}</h1>
+<p>{{SOKOL_RESPONSE_MESSAGE}}</p><p>{{SOKOL_RETRY_GUIDANCE}}</p>
+<p><a href="{{SOKOL_HELP_URL}}" rel="noreferrer">Why am I seeing this? Get help</a></p>
+<p>Contact the website owner first. Include the request ID, page URL, and time of the problem. The help page explains when to contact Sokol.</p>
+<p>Request ID: {{SOKOL_REQUEST_ID}}</p></main></body></html>`
 
 const fallbackChallengePage = `<!doctype html>
 <html lang="en" data-sokol-system-page="challenge"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <meta name="robots" content="noindex,nofollow"><title>Sokol verification</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#eef6f7;font-family:system-ui,sans-serif}main{width:min(36rem,calc(100% - 2rem));padding:2rem}button{padding:.7rem 1rem}#warning{color:#fde68a}</style></head>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#eef6f7;font-family:system-ui,sans-serif}main{width:min(36rem,calc(100% - 2rem));padding:2rem}button{padding:.7rem 1rem}a{color:#7dd3fc}#warning{color:#fde68a}</style></head>
 <body><main id="challenge" data-url="{{SOKOL_CHALLENGE_URL}}" data-token="{{SOKOL_CHALLENGE_TOKEN}}" data-resource="{{SOKOL_CHALLENGE_RESOURCE_ID}}" data-site="{{SOKOL_CHALLENGE_SITE_ID}}" data-path="{{SOKOL_PATH}}" data-auto="{{SOKOL_CHALLENGE_AUTO_START}}">
 <h1>Verification required</h1><p>Sokol needs a brief proof-of-work check.</p>
 <sokol-captcha id="widget" name="sokol" challenge-url="{{SOKOL_CHALLENGE_URL}}" gate-submit="false" auto="off"></sokol-captcha>
 <p id="status" role="status"></p>
 <p id="warning" hidden>If verification assets are blocked, allow sokol-static.my-k.cloud and sokol.my-k.cloud, or disable the blocker for this site.</p>
+<noscript><p>Enable JavaScript for this website, then reload to verify.</p></noscript>
+<p>{{SOKOL_RETRY_GUIDANCE}}</p><p><a href="{{SOKOL_HELP_URL}}" rel="noreferrer">Trouble verifying? Get help</a></p>
+<p>Contact the website owner first. Include the request ID, page URL, and time of the problem. The help page explains when to contact Sokol.</p>
 <p>Request ID: {{SOKOL_REQUEST_ID}}</p></main>
 <script nonce="{{SOKOL_CSP_NONCE}}" data-sokol-site="{{SOKOL_CHALLENGE_SITE_ID}}" src="https://sokol-static.my-k.cloud/v1/sokol.iife.js" defer></script>
 <script nonce="{{SOKOL_CSP_NONCE}}">(()=>{const r=document.getElementById('challenge'),w=document.getElementById('widget'),s=document.getElementById('status'),n=document.getElementById('warning');let q=false;const blocked=()=>{n.hidden=false};const fail=()=>{blocked();s.textContent='Verification did not complete. Please retry.';q=false};const payload=x=>x&&x.payload||r.querySelector('input[name="sokol"]')?.value;const complete=async x=>{if(q)return;q=true;s.textContent='Finishing verification…';try{const p=payload(x);if(!p)throw Error('payload');const u=new URL(r.dataset.url,location.href),z=await fetch(u.pathname+'/verify',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({challenge_token:r.dataset.token,resource_id:r.dataset.resource,site_id:r.dataset.site,path:r.dataset.path,payload:p})}),j=await z.json();if(!z.ok||!j.verified)throw Error('rejected');const d=new URL(location.href);d.pathname=r.dataset.path;d.search='';d.hash='';location.assign(d.href)}catch(e){fail()}};w.addEventListener('verified',e=>complete(e.detail));w.addEventListener('statechange',e=>{if(e.detail&&e.detail.state==='verified')complete(e.detail)});const run=async()=>{s.textContent='Verifying…';try{await complete(await w.verify({timeout:180000}))}catch(e){fail()}};const t=setTimeout(fail,8000);customElements.whenDefined('sokol-captcha').then(()=>{clearTimeout(t);if(r.dataset.auto==='true')run();else s.textContent='Use the verification control when you are ready.'}).catch(fail);fetch('https://sokol.my-k.cloud/api/tools/identity',{mode:'cors',cache:'no-store',credentials:'include'}).catch(blocked)})()</script>
@@ -91,7 +100,17 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 		url.QueryEscape(response.SiteID) + "&path=" +
 		url.QueryEscape(request.URL.Path)
 	template := string(p.page(response.Decision, time.Now()))
+	title, message := responsePageCopy(response)
+	retryGuidance := ""
+	if response.RetryAfterSeconds > 0 {
+		retryGuidance = "Wait at least " + strconv.Itoa(response.RetryAfterSeconds) + " seconds before trying again."
+	}
 	replacements := map[string]string{
+		"{{SOKOL_RESPONSE_STATUS}}":       strconv.Itoa(status),
+		"{{SOKOL_HELP_URL}}":              html.EscapeString(responseHelpURL(response)),
+		"{{SOKOL_RESPONSE_TITLE}}":        html.EscapeString(title),
+		"{{SOKOL_RESPONSE_MESSAGE}}":      html.EscapeString(message),
+		"{{SOKOL_RETRY_GUIDANCE}}":        html.EscapeString(retryGuidance),
 		"{{SOKOL_REQUEST_ID}}":            html.EscapeString(response.RequestID),
 		"{{SOKOL_HOST}}":                  html.EscapeString(request.Host),
 		"{{SOKOL_PATH}}":                  html.EscapeString(request.URL.EscapedPath()),
@@ -108,6 +127,52 @@ func (p *pageStore) write(writer http.ResponseWriter, request *http.Request, res
 	}
 	writer.WriteHeader(status)
 	_, _ = io.WriteString(writer, template)
+}
+
+// Help destinations contain only a fixed category, never request URLs, IDs,
+// client addresses, challenge tokens, or arbitrary agent-provided reasons.
+func responseHelpURL(response evaluationResponse) string {
+	topic, category := "block", "policy"
+	switch response.Decision {
+	case "challenge":
+		topic = "challenge"
+	case "rate_limit":
+		topic, category = "rate-limit", "rate-limit"
+	case "error":
+		topic, category = "unavailable", "unavailable"
+	}
+	switch response.PublicReason {
+	case "rate_limit_block", "rate_limit_exceeded", "rate_limited", "behavioral_rate_limit":
+		topic, category = "rate-limit", "rate-limit"
+	case "rate_limit_challenge":
+		category = "rate-limit"
+	case "waf_blocked":
+		category = "firewall"
+	case "bad_actor_drop", "bad_actor_challenge", "bad_actor_challenge_unavailable":
+		category = "reputation"
+	case "behavioral_block", "behavioral_challenge":
+		category = "behavior"
+	case "invalid_request", "request_body_too_large":
+		topic, category = "block", "request"
+	}
+	return "https://sokol.my-k.cloud/help/" + topic + "?type=" + category
+}
+
+func responsePageCopy(response evaluationResponse) (string, string) {
+	switch response.PublicReason {
+	case "invalid_request":
+		return "This request didn’t make the cut.", "Sokol couldn’t read the request as sent. Check the address or reopen the page from the website’s home page."
+	case "request_body_too_large":
+		return "That’s a bit much.", "The request exceeded this website’s size limit. If you were uploading a file, try a smaller one."
+	}
+	switch response.Decision {
+	case "block":
+		return "Not on the list.", "Sokol stopped this request at the edge. The protected service never had to pretend it was interested."
+	case "rate_limit":
+		return "Easy there.", "This client is sending requests faster than good manners allow. Wait a moment, then try again."
+	default:
+		return "Guard stepped away.", "The local Sokol protection service did not answer safely, so this request is waiting outside. Briefly, we hope."
+	}
 }
 
 func setJSONCORSHeaders(header http.Header, origin string) {

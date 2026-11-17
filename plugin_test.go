@@ -503,7 +503,7 @@ func TestMissingOversizedAndInvalidUTF8CustomPagesUseFallback(t *testing.T) {
 			request.RemoteAddr = "198.51.100.2:1234"
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
-			if !strings.Contains(response.Body.String(), "Request unavailable") {
+			if !strings.Contains(response.Body.String(), "<h1>Not on the list.</h1>") {
 				t.Fatalf("fallback not rendered: %s", response.Body.String())
 			}
 		})

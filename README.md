@@ -162,6 +162,22 @@ block, challenge, rate-limit, and local-Agent-unavailable responses. Copy them
 to the configured `responses.root`, which defaults to `/etc/traefik/sokol`.
 Operators can replace any page with bounded custom HTML.
 
+Every shipped page and built-in fallback links to public visitor guidance at
+`https://sokol.my-k.cloud/help`. The plugin chooses block, challenge, rate-limit,
+or unavailable guidance from the decision and an allowlisted public-reason
+category. Rate-limit blocks (403) link to rate-limit help; rate-limit challenges
+link to challenge help with rate-limit context. Links carry only that category,
+never a request ID, client IP, protected URL, or challenge token. Visitors contact
+the website owner first; the help pages explain self-service steps, what to
+include in a report, and when to escalate through KSoft.TECH Helpdesk.
+
+Custom templates can use `{{SOKOL_HELP_URL}}` (escaped absolute help link) and
+`{{SOKOL_RETRY_GUIDANCE}}` (waiting guidance when the Agent provides a delay,
+otherwise empty), alongside `{{SOKOL_REQUEST_ID}}`. Deploy the backend help
+routes before distributing the updated plugin/pages. The static page source
+must be built in the error-pages project and `dist/sokol-plugin/*.html` copied
+into this repository's `pages/` directory.
+
 These files are compiled from the `sokol-plugin` section of the KSoft error
 pages project. Block, rate-limit, and unavailable pages contain no runtime
 scripts. The challenge page initializes

@@ -160,7 +160,7 @@ func runChecks(outage bool) error {
 		contains             string
 	}{
 		{method: http.MethodGet, path: "/", status: 200, contains: "upstream"},
-		{method: http.MethodGet, path: "/blocked", status: 403, contains: "Not on the list."},
+		{method: http.MethodGet, path: "/blocked", status: 403, contains: "https://sokol.my-k.cloud/help/block?type=policy"},
 		{method: http.MethodGet, path: "/blocked", accept: "application/json", status: 403, contains: "request_blocked"},
 		{method: http.MethodGet, path: "/agent-timeout", status: 200, contains: "upstream"},
 		{method: http.MethodGet, path: "/agent-malformed", status: 200, contains: "upstream"},

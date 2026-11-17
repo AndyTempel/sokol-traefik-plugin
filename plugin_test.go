@@ -24,6 +24,7 @@ type agentFixture struct {
 	requests atomic.Int64
 	inputs   chan evaluationRequest
 	handler  atomic.Value
+	robots   atomic.Value // http.HandlerFunc for GET /v1/robots
 }
 
 type agentHandler func(http.ResponseWriter, *http.Request, evaluationRequest)
@@ -41,6 +42,15 @@ func newAgentFixture(t *testing.T) *agentFixture {
 		fixture.requests.Add(1)
 		if request.Header.Get("Authorization") != "Bearer "+testToken {
 			http.Error(writer, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if request.URL.Path == "/v1/robots" {
+			handler, _ := fixture.robots.Load().(http.HandlerFunc)
+			if handler == nil {
+				http.NotFound(writer, request)
+				return
+			}
+			handler(writer, request)
 			return
 		}
 		var input evaluationRequest
@@ -751,7 +761,7 @@ func TestRateLimitRetryAfterIsPassedThroughWithoutBuffering(t *testing.T) {
 		if got := response.Header().Get("Retry-After"); got != "7" {
 			t.Fatalf("%s: Retry-After = %q", accept, got)
 		}
-		if got := <-features; got != "retry-after" {
+		if got := <-features; got != "retry-after,robots" {
 			t.Fatalf("features header = %q", got)
 		}
 	}
@@ -769,6 +779,82 @@ func TestRetryAfterIsRejectedOnNonDenyDecisions(t *testing.T) {
 	}
 	valid := evaluationResponse{Decision: "block", Status: 403, RequestID: "r", PublicReason: "rate_limit_block", RetryAfterSeconds: 300}
 	if err := validateEvaluationResponse("r", valid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRobotsDecisionServesAgentBodyOrFallsBackToOrigin(t *testing.T) {
+	fixture := newAgentFixture(t)
+	fixture.handler.Store(agentHandler(func(writer http.ResponseWriter, _ *http.Request, input evaluationRequest) {
+		writeAgentResponse(writer, evaluationResponse{
+			Decision: "robots", Status: 200, RequestID: input.RequestID,
+			PublicReason: "robots_txt", ResourceID: "resource-1",
+		})
+	}))
+	queries := make(chan string, 8)
+	const body = "User-agent: GPTBot\nDisallow: /\n"
+	fixture.robots.Store(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		queries <- request.URL.RawQuery
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writer.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = io.WriteString(writer, body)
+	}))
+	var originHits atomic.Int64
+	handler := newMiddleware(t, testConfig(t, fixture), http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		originHits.Add(1)
+		_, _ = io.WriteString(writer, "origin")
+	}))
+	serve := func(method, target string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, target, nil)
+		request.RemoteAddr = "198.51.100.2:1234"
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	response := serve("GET", "http://shop.example.test/robots.txt")
+	if response.Code != 200 || response.Body.String() != body ||
+		response.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+		response.Header().Get("Cache-Control") != "public, max-age=300" || originHits.Load() != 0 {
+		t.Fatalf("robots = %d %q %v", response.Code, response.Body.String(), response.Header())
+	}
+	if query := <-queries; query != "host=shop.example.test&scheme=http" {
+		t.Fatalf("robots query = %q", query)
+	}
+	response = serve("HEAD", "http://shop.example.test/robots.txt")
+	if response.Code != 200 || response.Body.Len() != 0 || response.Header().Get("Content-Length") != strconv.Itoa(len(body)) {
+		t.Fatalf("HEAD robots = %d %q %v", response.Code, response.Body.String(), response.Header())
+	}
+	<-queries
+	// A robots decision for any other request is never answered by Sokol.
+	if response := serve("GET", "http://shop.example.test/other"); response.Body.String() != "origin" {
+		t.Fatalf("robots decision on another path = %q", response.Body.String())
+	}
+	// Nothing served by the Agent (404) or an Agent error: the origin answers.
+	fixture.robots.Store(http.HandlerFunc(http.NotFound))
+	if response := serve("GET", "http://shop.example.test/robots.txt"); response.Body.String() != "origin" {
+		t.Fatalf("404 fallback = %q", response.Body.String())
+	}
+	fixture.robots.Store(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "broken", http.StatusInternalServerError)
+	}))
+	if response := serve("GET", "http://shop.example.test/robots.txt"); response.Body.String() != "origin" {
+		t.Fatalf("error fallback = %q", response.Body.String())
+	}
+	fixture.robots.Store(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		writer.Header().Set("Content-Length", strconv.Itoa(maximumRobotsBytes+1))
+		_, _ = writer.Write(make([]byte, maximumRobotsBytes+1))
+	}))
+	if response := serve("GET", "http://shop.example.test/robots.txt"); response.Body.String() != "origin" {
+		t.Fatalf("oversized fallback = %q", response.Body.String())
+	}
+}
+
+func TestRobotsDecisionMustBeOK(t *testing.T) {
+	if err := validateEvaluationResponse("r", evaluationResponse{Decision: "robots", Status: 403, RequestID: "r", PublicReason: "robots_txt"}); err == nil {
+		t.Fatal("robots decision with a deny status accepted")
+	}
+	if err := validateEvaluationResponse("r", evaluationResponse{Decision: "robots", Status: 200, RequestID: "r", PublicReason: "robots_txt"}); err != nil {
 		t.Fatal(err)
 	}
 }

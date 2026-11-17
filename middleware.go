@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -117,6 +118,10 @@ func (m *Middleware) handleDecision(writer http.ResponseWriter, request *http.Re
 	switch response.Decision {
 	case "allow", "observe":
 		m.next.ServeHTTP(writer, request)
+	case "robots":
+		if !m.serveRobots(writer, request) {
+			m.next.ServeHTTP(writer, request)
+		}
 	case "block", "challenge", "rate_limit":
 		if m.config.FailureMode.ExplicitLocalDeny == "allow" {
 			m.next.ServeHTTP(writer, request)
@@ -129,6 +134,56 @@ func (m *Middleware) handleDecision(writer http.ResponseWriter, request *http.Re
 	default:
 		m.handleFailure(writer, request, response.RequestID, agentMalformed)
 	}
+}
+
+// serveRobots answers a "robots" decision with the Agent's robots.txt. It
+// reports false, having written nothing, when the request must reach the
+// origin instead: not a GET or HEAD of /robots.txt, nothing served by the
+// Agent, an open circuit breaker or any error. The origin is never buffered;
+// the Agent's bounded body is read before anything is written.
+func (m *Middleware) serveRobots(writer http.ResponseWriter, request *http.Request) bool {
+	method := strings.ToUpper(request.Method)
+	if request.URL.Path != robotsPath || (method != http.MethodGet && method != http.MethodHead) {
+		return false
+	}
+	now := time.Now()
+	if !m.breaker.allow(now) {
+		return false
+	}
+	body, found, err := m.agent.robots(request.Context(), request.Host, requestScheme(request, m.runtime.trusted))
+	if err != nil {
+		m.breaker.failure(now)
+		m.logRobotsProblem()
+		return false
+	}
+	m.breaker.success()
+	if !found {
+		return false
+	}
+	header := writer.Header()
+	header.Set("Content-Type", "text/plain; charset=utf-8")
+	header.Set("Cache-Control", "public, max-age=300")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("Content-Length", strconv.Itoa(len(body)))
+	writer.WriteHeader(http.StatusOK)
+	if method != http.MethodHead {
+		_, _ = writer.Write(body)
+	}
+	return true
+}
+
+// logRobotsProblem reports Agent robots.txt failures at most once per
+// interval, since crawlers request robots.txt constantly.
+func (m *Middleware) logRobotsProblem() {
+	now := time.Now()
+	m.clientIPLogMu.Lock()
+	if !m.robotsLogAt.IsZero() && now.Sub(m.robotsLogAt) < clientIPLogInterval {
+		m.clientIPLogMu.Unlock()
+		return
+	}
+	m.robotsLogAt = now
+	m.clientIPLogMu.Unlock()
+	log.Printf("sokol middleware %q: robots.txt unavailable from the local agent; passing to the origin", m.name)
 }
 
 func (m *Middleware) handleFailure(writer http.ResponseWriter, request *http.Request, requestID string, kind agentErrorKind) {

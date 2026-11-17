@@ -203,6 +203,7 @@ type Middleware struct {
 
 	clientIPLogMu sync.Mutex
 	clientIPLogAt time.Time
+	robotsLogAt   time.Time // guarded by clientIPLogMu
 }
 
 // New constructs the middleware using Traefik's plugin contract.

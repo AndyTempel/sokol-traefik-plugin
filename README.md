@@ -110,12 +110,21 @@ The decision cache is deny-only. It accepts only Agent-authorized block or
 rate-limit responses bound to the exact request, client, Resource, decision
 scope, and policy revision. Allows and challenge tokens are never cached.
 
-Evaluation requests carry `X-Sokol-Features: retry-after`. Agents that support
-it may then return `retry_after_seconds` (1–86400, only on `rate_limit` and
+Evaluation requests carry `X-Sokol-Features: retry-after,robots`. Agents that
+support `retry-after` may then return `retry_after_seconds` (1–86400, only on `rate_limit` and
 `block` decisions), which the plugin sends as the `Retry-After` header on the
 429 or 403 page and exposes to cross-origin JSON callers. Older Agents ignore
 the header and never send the field. The header is set before the status is
 written; downstream responses are still never buffered.
+
+With `robots`, an Agent may answer `GET` or `HEAD /robots.txt` with the
+decision `robots` (status 200). The plugin then reads the body from the
+Agent's `GET /v1/robots?host=&scheme=` (same token and timeout), reads it
+completely (it is small and bounded) and serves it
+as `text/plain; charset=utf-8` with `Cache-Control: public, max-age=300`, up to
+576 KiB. A `404` from the Agent, any error, or a `robots` decision for another
+request sends the request to the origin unchanged. Robots decisions are never
+cached and the origin's response is never buffered.
 
 The immediate peer is checked automatically against Cloudflare's official IPv4
 and IPv6 lists and Bunny's official edge and node lists. With the `forwarded`

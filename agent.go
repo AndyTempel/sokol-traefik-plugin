@@ -22,8 +22,13 @@ const maximumAgentResponseBytes = 32 << 10
 // that do not ask, because older plugins decode responses strictly.
 const (
 	agentFeaturesHeader = "X-Sokol-Features"
-	agentFeatures       = "retry-after"
+	agentFeatures       = "retry-after,robots"
 	maximumRetryAfter   = 86_400
+	// robotsPath is the only path for which an Agent may answer "robots".
+	robotsPath = "/robots.txt"
+	// maximumRobotsBytes bounds the robots.txt body read from the Agent: the
+	// 500 KiB crawlers read plus room for the managed rules.
+	maximumRobotsBytes = 512<<10 + 64<<10
 )
 
 type evaluationRequest struct {
@@ -91,6 +96,7 @@ func (e *agentError) Error() string {
 type agentClient struct {
 	client             *http.Client
 	evaluateURL        string
+	robotsURL          string
 	challengeCreateURL string
 	challengeVerifyURL string
 	token              string
@@ -119,18 +125,14 @@ func newAgentClient(
 		TLSHandshakeTimeout:   connectTimeout,
 		ExpectContinueTimeout: 100 * time.Millisecond,
 	}
-	evaluateURL := strings.TrimSuffix(endpoint, "/") + "/v1/evaluate"
-	challengeCreateURL := strings.TrimSuffix(endpoint, "/") + "/v1/challenge/create"
-	challengeVerifyURL := strings.TrimSuffix(endpoint, "/") + "/v1/challenge/verify"
+	base := strings.TrimSuffix(endpoint, "/")
 	if parsed.Scheme == "unix" {
 		socketPath := filepath.Clean(parsed.Path)
 		transport.ForceAttemptHTTP2 = false
 		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return dialer.DialContext(ctx, "unix", socketPath)
 		}
-		evaluateURL = "http://sokol-edge-agent/v1/evaluate"
-		challengeCreateURL = "http://sokol-edge-agent/v1/challenge/create"
-		challengeVerifyURL = "http://sokol-edge-agent/v1/challenge/verify"
+		base = "http://sokol-edge-agent"
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -139,8 +141,8 @@ func newAgentClient(
 		},
 	}
 	return &agentClient{
-		client: client, evaluateURL: evaluateURL,
-		challengeCreateURL: challengeCreateURL, challengeVerifyURL: challengeVerifyURL,
+		client: client, evaluateURL: base + "/v1/evaluate", robotsURL: base + "/v1/robots",
+		challengeCreateURL: base + "/v1/challenge/create", challengeVerifyURL: base + "/v1/challenge/verify",
 		token: token, timeout: requestTimeout, challengeTimeout: challengeTimeout,
 	}, nil
 }
@@ -237,7 +239,7 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 	}
 	expectedStatus := 0
 	switch response.Decision {
-	case "allow", "observe":
+	case "allow", "observe", "robots":
 		expectedStatus = http.StatusOK
 	case "block", "challenge":
 		expectedStatus = http.StatusForbidden
@@ -294,6 +296,44 @@ func validateEvaluationResponse(requestID string, response evaluationResponse) e
 		return errors.New("non-cacheable local response contains cache metadata")
 	}
 	return nil
+}
+
+// robots fetches the robots.txt the Agent serves for host. found is false
+// when the Agent serves nothing (404), so the request belongs to the origin.
+// The body is small and read completely within the Agent timeout, so a slow
+// client can never hold the Agent connection or truncate the response.
+func (c *agentClient) robots(parent context.Context, host, scheme string) (body []byte, found bool, err error) {
+	ctx, cancel := context.WithTimeout(parent, c.timeout)
+	defer cancel()
+	query := url.Values{"host": {host}, "scheme": {scheme}}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.robotsURL+"?"+query.Encode(), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	request.Header.Set("Authorization", "Bearer "+c.token)
+	request.Header.Set("Accept", "text/plain")
+	response, err := c.client.Do(request)
+	if err != nil {
+		return nil, false, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusNotFound {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return nil, false, nil
+	}
+	if response.StatusCode != http.StatusOK ||
+		!strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/plain") ||
+		response.ContentLength > maximumRobotsBytes {
+		return nil, false, fmt.Errorf("local agent robots status %d", response.StatusCode)
+	}
+	body, err = io.ReadAll(io.LimitReader(response.Body, maximumRobotsBytes+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(body) > maximumRobotsBytes {
+		return nil, false, errors.New("local agent robots.txt exceeds limit")
+	}
+	return body, true, nil
 }
 
 type challengeContext struct {
